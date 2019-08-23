@@ -1,0 +1,28 @@
+{
+  "name": "miniproject-dystonse",
+  "description": "Play with stochastic routing.",
+  "version": "0.0.1",
+  "keywords": [
+    "vbb",
+    "map",
+    "bvg",
+    "routing"
+  ],
+  "author": "Lena Schimmel <mail@lenaschimmel.de>",
+  "homepage": "https://twitter.com/dystonse",
+  "license": "MIT",
+  "engines": {
+    "node": ">=6"
+  },
+  "dependencies": {
+    "vbb-stations": "^6.0.0",
+    "vbb-lines": "^4.6.0",
+    "vbb-lines-at": "^3.19.0",
+    "vbb-trips": "^3.9.0",
+    "vbb-find-station": "1.1.0",
+    "stream-to-array": "2.3.0",
+    "@tyriar/fibonacci-heap": "2.0.9",
+    "geodist": "0.2.1",
+    "printf": "0.5.2"
+  }
+}
