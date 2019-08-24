@@ -1,11 +1,11 @@
 Offenbar habe ich vor 2 Jahren das letzte Mal an dystonse gearbeitet, und nicht ordentlich archiviert. 
 
-Was ich habe oder haben müsste:
+Was ich habe (oder irgendwo haben müsste):
  * Tweets unter @dystonse
  * Quasi leeres Repo unter https://github.com/lenaschimmel/dystonse
  * Repo mit etwas Info und Code unter https://github.com/lenaschimmel/dystonse-tools
- * Irgendwo die Daten als MySQL-Tabelle, etwas über 3 GB
- * Meine "wissenschaftliches" Notizen für Fekete, die mal online waren
+ * Irgendwo die gesammelten Echtzeit-Daten von 2017 als MySQL-Tabelle, etwas über 3 GB
+ * Meine "wissenschaftliches" Notizen für die Masterarbeit, die auch irgendwann mal online waren
  * Sehr vielversprechende tools von derhuerst
 
 Wenn ich die tools / daten / apis / formate von derhuerst nutzen will, sollte auch meine Software in JS geschrieben 
