@@ -33,7 +33,9 @@ var bestEta;
 
 const all_stations = stations;
 
-var heap = new FibonacciHeap();
+var stationHeap = new FibonacciHeap();
+
+var reachableStations = {};
 
 /*
 var departureTimeSpan = [
@@ -62,9 +64,9 @@ var departureTimeSpan = [
 
 
 var stopTimeSpan = [
-    [-20 , 0],
-    [-10 , 0.2],  
-    [  0 , 0.6],
+    [  0 , 0],
+    [  1 , 0.2],  
+    [  2 , 0.6],
     [ 10 , 0.8],
     [ 30 , 0.9],
     [ 80 , 0.95],
@@ -104,23 +106,35 @@ var nextJourneyId = 1;
 const globalResolution = 30;
 const maxDataPoints = 100;
 
+var map;
+var mapWidth, mapHeight;
+var minLng;
+var maxLng;
+var minLat;
+var maxLat;
+
+
 (async () => {
     // testDrive();
 
     console.log("Preprocessing data");
     indexStops();
-
+    initMap();
+    
     console.log("Searching schedules");
     subway_schedules = await getSchedulesForProduct("subway");
     sbahn_schedules = await getSchedulesForProduct("suburban");
     all_schedules = subway_schedules.concat(sbahn_schedules);
-
-    initialStartStation = await getFullStationByName("Dahlem Dorf, Berlin");
-    finalDestionationStation = await getFullStationByName("Schönhauser Allee, Berlin");
-
+    
+    //initialStartStation = await getFullStationByName("Dahlem Dorf, Berlin");
+    //finalDestionationStation = await getFullStationByName("Schönhauser Allee, Berlin");
+    
+    
     initialStartStation = await getRandomStation();
     finalDestionationStation = await getRandomStation();
 
+    printMap();
+    
     startTime = new Date("2019-07-26T23:24:00").getTime() / 1000 + (Math.random() * 7 * 24 * 60 * 60);
     const timerange = [ [startTime - globalResolution / 2, 0.0], [startTime + globalResolution / 2, 1.0] ];
     var journey = {
@@ -136,22 +150,98 @@ const maxDataPoints = 100;
     console.log("Starting search from " + initialStartStation.name + " to " + finalDestionationStation.name + " at " + timestring(startTime));
     
 
-    while (!heap.isEmpty()) {
-        var newHeap = new FibonacciHeap();
-        while (!heap.isEmpty()) {
-            const node = heap.extractMinimum();
-            console.log("ETA " + timestring(node.key) + " Start " + timespanstring(node.value.timerange) + " " + node.value.distance + "m "+ node.value.start.name);
-            newHeap.insert(node.key, node.value);
-            if(newHeap.size() > 20)
-                break;
+    while (Object.values(reachableStations).length > 0) {
+        console.log("FINAL: " + finalDestionationStation.name);
+
+        showTasks();
+
+        var records = Object.values(reachableStations).sort( (a,b) => a.minEtaFinal - b.minEtaFinal );
+
+        const stationRecord = records[0];
+        
+        if(!stationRecord.taskHeap.isEmpty()) {
+            var task = stationRecord.taskHeap.extractMinimum().value;
+
+           // if(stationRecord.taskHeap.isEmpty()) {
+                delete reachableStations[stationRecord.station.id];
+            //}
+            console.log("Starting task: " + task.start.name);
+            drawOnMap(task.start.location, '🧡');
+            await processTask(task);
+        } else {
+            delete reachableStations[stationRecord.station.id];
         }
 
-        heap = newHeap;
-
-        const node = heap.extractMinimum();
-        await processTask(node.value);
+        printMap();
     }
 })();
+
+function showTasks() {
+    console.log("\nTASKS:");
+    var records = Object.values(reachableStations).sort( (a,b) => a.minEtaFinal - b.minEtaFinal );
+    var i = 0;
+    for(record of records) {
+        if(i++ > 5) {
+            console.log("...");
+            break;
+        }
+        console.log(timestring(record.minEtaFinal) + "      " + timestring(record.minEtaHere) + "      " + record.distance + "m      " + record.station.name + "(" + record.taskHeap.size() + ")");
+    }
+}
+
+function initMap() {
+    var berlinStations = [];
+
+    var keys = Object.keys(lines_at);
+    for(key of keys) {
+        station = all_stations[key];
+        var lines = lines_at[station.id].filter(line => line.product == "subway" || line.product == "suburban");
+        if(lines.length > 0 && station.name.indexOf("Berlin") != -1)
+            berlinStations.push(station);
+    } 
+
+    minLng = berlinStations.map(s => s.location.longitude).reduce(  (a,b) => Math.min(a,b) ); // x
+    maxLng = berlinStations.map(s => s.location.longitude).reduce(  (a,b) => Math.max(a,b) );
+    minLat = berlinStations.map(s => s.location.latitude ).reduce(  (a,b) => Math.min(a,b) ); // y
+    maxLat = berlinStations.map(s => s.location.latitude ).reduce(  (a,b) => Math.max(a,b) );
+    const ratio = (maxLng - minLng) / (maxLat-minLat);
+    
+    mapHeight = 90;
+    mapWidth = Math.floor(mapHeight * ratio * 1.5);
+
+    map = [];
+    for(var x = 0; x <= mapWidth; x++) {
+      map.push([]);
+      for(var y = 0; y <= mapHeight; y++) {
+        map[x].push(' ');
+      }
+    }
+
+    for (const station of berlinStations) {
+        drawOnMap(station.location, '.');
+    }
+}
+
+function drawOnMap(location, char) {
+    var x = Math.floor((location.longitude - minLng) / (maxLng - minLng) * mapWidth);
+    var y = Math.floor((location.latitude - minLat) / (maxLat - minLat) * mapHeight);
+    if(x < 0 || y < 0 || x >= mapWidth || y >= mapHeight)
+        return;
+    map[x][y] = char;
+}
+
+function printMap() {
+    drawOnMap(initialStartStation.location, '🚩');
+    drawOnMap(finalDestionationStation.location, '🏁');
+    
+    for(var y = 0; y <= mapHeight; y++) {
+        var line = "";
+        for(var x = 0; x <= mapWidth; x++) {
+            line += map[x][y];
+        }
+        console.log(line);
+    }
+}
 
 async function getRandomStation() {
     var station;
@@ -262,14 +352,14 @@ async function processTask(task) {
     const startStation = task.start;
 
     if(!bestEta || task.estimatedWalkArrival < bestEta + 300) {
-        console.log("(" + heap.size() + ") Starting from " + startStation.name + " at around " + timespanstring(task.timerange) + ", etwa "+task.distance+"m Fußweg verbleiben, ETA: " + timestring(task.estimatedWalkArrival) + " (zuvor: " + task.journey.legs.length +")");
+        console.log("Starting from " + startStation.name + " at around " + timespanstring(task.timerange) + ", etwa "+task.distance+"m Fußweg verbleiben, ETA: " + timestring(task.estimatedWalkArrival) + " (zuvor: " + task.journey.legs.length +")");
     }
 
     if(!bestEta || task.estimatedWalkArrival < bestEta) {
         bestEta = task.estimatedWalkArrival;
         console.log("NEW BEST JOURNEY:");
 
-        console.log("(" + heap.size() + ") Starting from " + startStation.name + " at around " + timespanstring(task.timerange) + ", etwa "+task.distance+"m Fußweg verbleiben, ETA: " + timestring(task.estimatedWalkArrival) + " (zuvor: " + task.journey.legs.length +")");
+        console.log("Starting from " + startStation.name + " at around " + timespanstring(task.timerange) + ", etwa "+task.distance+"m Fußweg verbleiben, ETA: " + timestring(task.estimatedWalkArrival) + " (zuvor: " + task.journey.legs.length +")");
         if(task.distance == 0) {
             console.log(util.inspect(task.journey, { depth: null}));
 
@@ -333,8 +423,8 @@ async function processTask(task) {
                         // how long does it usually take to drive from startStation to destinationStation?
                         var minutes = (schedule.sequence[destinationStationIndex].departure - schedule.sequence[startStationIndex].departure) / 60;
 
-                        // Is it plausible to get off here? Only if we can transfer, we are at our destination, or close enough to try walking from here
-                        if(otherSubways.length > 0 || destinationStation == finalDestionationStation || distBetweenStations(destinationStation, finalDestionationStation) < 1400) {
+                        // Is it plausible to get off here? Only if we can transfer, we are at our destination //, or close enough to try walking from here - actually, fuck walking
+                        if(otherSubways.length > 0 || destinationStation == finalDestionationStation) { // || distBetweenStations(destinationStation, finalDestionationStation) < 1400) {
                             var linesString = otherSubways.map(line => line.name).join(", ");
 
                             
@@ -346,7 +436,7 @@ async function processTask(task) {
                                 
                                 
                                 // rule out any departures that are too early or too late to be relevant
-                                if(scheduledDepartureTime < minTimestamp - 180 || scheduledDepartureTime > maxTimestamp + 1200) {
+                                if(scheduledDepartureTime < minTimestamp - 180 || scheduledDepartureTime > maxTimestamp + 3600) {
                                     continue;
                                 }
 
@@ -445,12 +535,13 @@ async function processTask(task) {
 function multitransfer(arrival, departures) {
     var combinedDeparture = [];
 
-    const minArrivalTime = arrival[0][0];
+    //departures.sort( (d1, d2) => d1[d1.length - 1] - d2[d2.length - 1]);
+
+    const minArrivalTime = arrival[1][0];
     const maxArrivalTime = arrival[arrival.length-1][0];
 
-    const minDepartureTime = departures[0][0][0];
-    const lastDeparture = departures[departures.length - 1];
-    const maxDepartureTime = lastDeparture[lastDeparture.length-1][0];
+    const minDepartureTime = departures.map(d => d[0][0]).reduce( (a,b) => Math.min(a,b));
+    const maxDepartureTime = departures.map(d => d[d.length-1][0]).reduce((a,b) => Math.max(a,b));
 
     const s = globalResolution;
     const s2 = s / 2;
@@ -462,7 +553,9 @@ function multitransfer(arrival, departures) {
     }
 
     for(var ta = minArrivalTime; ta <= maxArrivalTime; ta += s) {
-        const pArrival = interpolate(arrival, ta + s2) - interpolate(arrival, ta - s2); // Wahrscheinlichkeit, dass ich in diesem Zeitpunkt ankomme
+        var pArrival = interpolate(arrival, ta) - interpolate(arrival, ta - s); // Wahrscheinlichkeit, dass ich in diesem Zeitpunkt ankomme
+        if(ta == minArrivalTime)
+            pArrival = 0;
         
        // vorausgesetzt, ich bin seit genau $ta da
         
@@ -485,6 +578,28 @@ function multitransfer(arrival, departures) {
     }
    
     combinedDeparture = simplify(combinedDeparture);
+
+   if(arrival[0][0] > combinedDeparture[0][0]) {
+        console.log("\n\nTime;Arrival;Combined Departure;Individual Departures;");
+        for(var t = minArrivalTime; t <= maxDepartureTime; t += s) {
+            var line = printf("%s;%f;%f", new Date(t*1000).toLocaleTimeString('it-IT'), interpolate(arrival, t), interpolate(combinedDeparture, t));
+            for (const departure of departures) {     
+                line += printf(";%f", interpolate(departure, t));
+            }
+            console.log(line.replace(/\./g,","));
+        }
+
+        var i = 1;
+        for (const departure of departures) {
+            console.log("T" + i);
+            i++; 
+            printTimeRange(departure);
+        }
+
+    }
+
+    
+    
     return combinedDeparture;
 }
 
@@ -525,19 +640,46 @@ function distBetweenStations(s1, s2) {
 }
 
 function addTask(timerange, station, journey) {
-    const distance = distBetweenStations(station, finalDestionationStation);
-    const walkSeconds = distance;
-    const driveSeconds = distance / 9;
-    const estimatedWalkArrival = getExpectedTime(timerange) + walkSeconds;
-    const estimatedDriveArrival = getExpectedTime(timerange) + driveSeconds;
+    drawOnMap(station.location, '💚');
+    
+
+    //console.log("Add task for " + station.name);
+    var stationRecord = reachableStations[station.id];
+    if(!stationRecord) {
+        var distance = distBetweenStations(station, finalDestionationStation);
+        stationRecord = {
+            station: station,
+            minEtaHere: Infinity,
+            minEtaFinal: Infinity,
+            distance: distance,
+            taskHeap: new FibonacciHeap()
+        };
+        reachableStations[station.id] = stationRecord;
+       
+       // stationHeap.insert(stationRecord.minEtaFinal, stationRecord);
+    }
+    
     const task = {
         start : station,
         timerange : timerange,
         journey: journey,
-        distance: distance,
-        estimatedWalkArrival : estimatedWalkArrival
+        distance: stationRecord.distance,
+        estimatedStart  : getExpectedTime(timerange),
+        estimatedWalkArrival  : getExpectedTime(timerange) + stationRecord.distance,
+        estimatedDriveArrival : getExpectedTime(timerange) + stationRecord.distance / 27,
     };
-    heap.insert(estimatedDriveArrival, task);
+
+    stationRecord.taskHeap.insert(task.estimatedDriveArrival, task);
+    if(task.estimatedDriveArrival < stationRecord.minEtaFinal) {
+        stationRecord.minEtaFinal = task.estimatedDriveArrival;
+       // stationHeap.decreaseKey(stationRecord, stationRecord.minEtaFinal);
+    }
+    if(task.estimatedStart < stationRecord.minEtaHere) {
+        stationRecord.minEtaHere = task.estimatedStart;
+    }
+
+    
+    
 }
 
 function getExpectedTime(timerange) {
