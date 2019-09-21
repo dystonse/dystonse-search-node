@@ -10,44 +10,26 @@ const geodist = require('geodist');
 const printf = require('printf');
 const cloneDeep = require('lodash.clonedeep');
 const process = require('process');
-
-
 const FibonacciHeap = require('@tyriar/fibonacci-heap').FibonacciHeap;
+const toArray = require('stream-to-array');
 
-var toArray = require('stream-to-array');
-
-var subway_schedules;
-var sbahn_schedules;
 var all_schedules;
+
 var linesById = {};
-var sbahn_schedules;
 var scheduleArray = toArray(trips.schedules());
-var stopNames = {};
+//var stopNames = {};
 var stationByStop = {};
 
 var initialStartStation;
 var finalDestionationStation;
 var startTime;
 
-var bestEta;
 
-const all_stations = stations;
-
-var stationHeap = new FibonacciHeap();
-
-var reachableStations = {};
+var nodeByStationId = {};
+var openNodes = [];
+var closedNodes = [];
 
 /*
-var departureTimeSpan = [
-    [ -60 , 0],  
-    [ -30 , 0.15],
-    [   0 , 0.6],
-    [  30 , 0.8],
-    [  60 , 0.85],
-    [ 120 , 1]
-];
-*/
-
 var departureTimeSpan = [
     [-120 , 0],
     [ -60 , 0.05],  
@@ -60,7 +42,58 @@ var departureTimeSpan = [
     [ 300 , 0.95],
     [ 600 , 0.98],
     [1200 , 1.0]
-];
+];*/
+
+
+var departureTimeSpans = {
+    "bus" : [
+        [-240, 0.00],
+        [-180, 0.01],
+        [-120, 0.03],
+        [ -60, 0.12],
+        [   0, 0.45],
+        [  60, 0.64],
+        [ 120, 0.76],
+        [ 180, 0.83],
+        [ 240, 0.89],
+        [ 300, 0.92],
+        [ 360, 0.95],
+        [ 420, 0.96],
+        [ 480, 0.98],
+        [ 540, 0.98],
+        [ 600, 0.99],
+        [ 660, 0.99],
+        [ 720, 0.99],
+        [ 780, 0.99],
+        [ 840, 1.00]
+    ],
+    "subway" : [
+        [-120, 0.00],
+        [ -60, 0.04],
+        [   0, 0.74],
+        [  60, 0.91],
+        [ 120, 0.95],
+        [ 180, 0.98],
+        [ 240, 0.99],
+        [ 300, 1.00]
+    ],
+    "suburban" : 
+    [
+        [ -60, 0.00],
+        [   0, 0.73],
+        [  60, 0.87],
+        [ 120, 0.92],
+        [ 180, 0.94],
+        [ 240, 0.95],
+        [ 300, 0.96],
+        [ 360, 0.97],
+        [ 420, 0.98],
+        [ 480, 0.98],
+        [ 540, 0.99],
+        [ 600, 0.99],
+        [ 660, 1.00]
+    ]
+};
 
 
 var stopTimeSpan = [
@@ -73,6 +106,7 @@ var stopTimeSpan = [
     [150 , 1.0]
 ];
 
+/*
 var travelTimeSpan = [ // for ideal travel = 60
     [ 40 , 0],
     [ 50 , 0.2],  
@@ -80,7 +114,38 @@ var travelTimeSpan = [ // for ideal travel = 60
     [ 75 , 0.95],
     [ 90 , 0.97],
     [150 , 1.0]
-];
+];*/
+
+var travelTimeSpans = { // currently only for prevDelay = 0
+    "bus" : [
+        [  27, 0.00],
+        [  38, 0.03],
+        [  49, 0.14],
+        [  60, 0.73],
+        [  70, 0.91],
+        [  81, 0.97],
+        [  92, 0.99],
+        [ 103, 0.99],
+        [ 114, 1.00]
+    ],
+    "subway" : [
+        [  13, 0.00],
+        [  36, 0.02],
+        [  60, 0.96],
+        [  83, 0.99],
+        [ 106, 1.00],
+        [ 129, 1.00],
+        [ 176, 1.00],
+    ],
+    "suburban" : 
+    [
+        [  28, 0.00],
+        [  44, 0.27],
+        [  60, 0.96],
+        [  75, 0.99],
+        [  91, 1.00]
+    ]
+};
    
 
 var changePlatformTimeSpan = [
@@ -104,7 +169,7 @@ var transferTimeSpan = [ // for ideal travel = 60
 var nextJourneyId = 1;
 
 const globalResolution = 30;
-const maxDataPoints = 100;
+const maxDataPoints = 120;
 
 var map;
 var mapWidth, mapHeight;
@@ -113,93 +178,156 @@ var maxLng;
 var minLat;
 var maxLat;
 
+var schedulesByStationId = {};
+var berlinStations = [];
 
 (async () => {
-    // testDrive();
 
-    console.log("Preprocessing data");
-    indexStops();
-    initMap();
-    
-    console.log("Searching schedules");
-    subway_schedules = await getSchedulesForProduct("subway");
-    sbahn_schedules = await getSchedulesForProduct("suburban");
-    all_schedules = subway_schedules.concat(sbahn_schedules);
-    
-    //initialStartStation = await getFullStationByName("Dahlem Dorf, Berlin");
-    //finalDestionationStation = await getFullStationByName("Schönhauser Allee, Berlin");
-    
-    
-    initialStartStation = await getRandomStation();
-    finalDestionationStation = await getRandomStation();
+    if(false) {
+        var t = 0; // new  Date("2019-07-26T11:00:00").getTime() / 1000;
 
-    printMap();
-    
-    startTime = new Date("2019-07-26T23:24:00").getTime() / 1000 + (Math.random() * 7 * 24 * 60 * 60);
-    const timerange = [ [startTime - globalResolution / 2, 0.0], [startTime + globalResolution / 2, 1.0] ];
-    var journey = {
-        type: 'journey',
-        id: nextJourneyId++,
-        legs: [
+        var timerangeAtPlatform = [[t+1600, 0.0], [t+1860, 1.0]]
+
+        var departures = [];
+        for (const routeStartTime of [t+300, t+600, t+900]) {
             
-        ]
-    };
 
-    addTask(timerange, initialStartStation, journey);
+            // get a very exact time range
+            const scheduledDepartureTimeRange = [[routeStartTime - 5, 0.0], [routeStartTime + 5, 1.0]];
+            // then make it fuzzy
+            const departureTime = travel(scheduledDepartureTimeRange, departureTimeSpans["subway"], 1);
+            departures.push(departureTime);
 
-    console.log("Starting search from " + initialStartStation.name + " to " + finalDestionationStation.name + " at " + timestring(startTime));
-    
-
-    while (Object.values(reachableStations).length > 0) {
-        console.log("FINAL: " + finalDestionationStation.name);
-
-        showTasks();
-
-        var records = Object.values(reachableStations).sort( (a,b) => a.minEtaFinal - b.minEtaFinal );
-
-        const stationRecord = records[0];
+            printTimeRangeRelative(departureTime);
         
-        if(!stationRecord.taskHeap.isEmpty()) {
-            var task = stationRecord.taskHeap.extractMinimum().value;
-
-           // if(stationRecord.taskHeap.isEmpty()) {
-                delete reachableStations[stationRecord.station.id];
-            //}
-            console.log("Starting task: " + task.start.name);
-            drawOnMap(task.start.location, '🧡');
-            await processTask(task);
-        } else {
-            delete reachableStations[stationRecord.station.id];
         }
 
-        printMap();
+        const aggregateDepartureTime = multitransfer(timerangeAtPlatform, departures);
+                            
+        printTimeRangeRelative(timerangeAtPlatform);
+        printTimeRangeRelative(aggregateDepartureTime);
+    }else {
+        
+        console.log("Preprocessing data");
+        initBerlinStations();
+        indexStops();
+        initMap();
+
+        
+        console.log("Searching schedules");
+        var subway_schedules = await getSchedulesForProduct("subway");
+        var sbahn_schedules = await getSchedulesForProduct("suburban");
+        all_schedules = subway_schedules.concat(sbahn_schedules);
+        
+        indexSchedules();
+
+        initialStartStation = await getFullStationByName("U Siemensdamm (Berlin)");
+        finalDestionationStation = await getFullStationByName("U Weberwiese (Berlin)");
+
+        //finalDestionationStation = await getFullStationByName("S+U Wedding (Berlin)");
+
+        //initialStartStation = await getRandomStation();
+        //finalDestionationStation = await getRandomStation();
+
+        initNodes();
+        //printMap();
+        
+        startTime = new Date("2019-07-26T11:00:00").getTime() / 1000; // + (Math.random() * 7 * 24 * 60 * 60);
+        const timerange = [ 
+            [startTime - globalResolution / 2, 0.0], 
+            [startTime + globalResolution / 2, 1.0],
+            [startTime + globalResolution * 20, 1.0]
+        ];
+    
+
+        addOpenNode(nodeByStationId[initialStartStation.id], timerange, null, "losgehen");
+
+        while (openNodes.length > 0) {
+            console.log("START: " + initialStartStation.name);
+            console.log("FINAL: " + finalDestionationStation.name);
+            console.log("open nodes: " + openNodes.length);
+            console.log("closed nodes: " + closedNodes.length); 
+            for(node of openNodes) {
+                drawOnMap(node.station.location, '💚');
+            }for(node of closedNodes) {
+                drawOnMap(node.station.location, '💙');
+            }
+            
+            for(var i = 0; i < 8 && i < openNodes.length; i++) {
+                var char = "123456789"[i];
+                drawOnMap(openNodes[openNodes.length - i - 1].station.location, char);
+            }
+
+            //for(node of openNodes) {
+            //    console.log(timestring(node.heuristic) + " " + node.station.name);
+            //}
+            printMap();
+
+            var node = openNodes.pop();
+            processNode(node);
+        }
     }
 })();
 
-function showTasks() {
-    console.log("\nTASKS:");
-    var records = Object.values(reachableStations).sort( (a,b) => a.minEtaFinal - b.minEtaFinal );
-    var i = 0;
-    for(record of records) {
-        if(i++ > 5) {
-            console.log("...");
-            break;
-        }
-        console.log(timestring(record.minEtaFinal) + "      " + timestring(record.minEtaHere) + "      " + record.distance + "m      " + record.station.name + "(" + record.taskHeap.size() + ")");
-    }
-}
 
-function initMap() {
-    var berlinStations = [];
-
+function initBerlinStations() {
     var keys = Object.keys(lines_at);
     for(key of keys) {
-        station = all_stations[key];
+        station = stations[key];
         var lines = lines_at[station.id].filter(line => line.product == "subway" || line.product == "suburban");
         if(lines.length > 0 && station.name.indexOf("Berlin") != -1)
             berlinStations.push(station);
     } 
+}
 
+function indexSchedules() {
+    for (const key in all_schedules) {
+        if (all_schedules.hasOwnProperty(key)) {
+            const schedule = all_schedules[key];
+            
+            const routeStopIds = schedule.route.stops;
+            for (const stopId of routeStopIds) {
+                var station = stationByStop[stopId];
+                if(station) { // might not be found if outside of berlin
+                    if(!schedulesByStationId[station.id]) {
+                        schedulesByStationId[station.id] = [];
+                    }
+                    schedulesByStationId[station.id].push(schedule);
+                }
+            }
+        }
+    }
+}
+
+function addOpenNode(node, arrival, previousNode, line, prevDeparture, stops) {
+    if(node.arrivalExp) {
+        assert(openNodes.includes(node));
+        if(node.arrivalExp < getExpectedTime(arrival)) {
+            return;
+        } else {
+            openNodes.splice(openNodes.indexOf(node), 1);
+        }
+    }
+    node.arrival = arrival;
+    node.arrivalExp = getExpectedTime(arrival);
+    node.heuristic = node.arrivalExp + node.distance / 10;
+    node.previousNode = previousNode;
+    node.line = line;
+    node.prevDeparture = prevDeparture;
+    node.stops = stops;
+    if(!openNodes.includes(node)) {
+        openNodes.push(node);
+    }
+    openNodes.sort( (a,b) => b.heuristic - a.heuristic);
+}
+
+function addClosedNode(node) {
+    if(!closedNodes.includes(node)) {
+        closedNodes.push(node);
+    }
+}
+
+function initMap() {
     minLng = berlinStations.map(s => s.location.longitude).reduce(  (a,b) => Math.min(a,b) ); // x
     maxLng = berlinStations.map(s => s.location.longitude).reduce(  (a,b) => Math.max(a,b) );
     minLat = berlinStations.map(s => s.location.latitude ).reduce(  (a,b) => Math.min(a,b) ); // y
@@ -230,11 +358,31 @@ function drawOnMap(location, char) {
     map[x][y] = char;
 }
 
+
+function drawLine(loc1, loc2, char) {
+    var x1 = Math.floor((loc1.longitude - minLng) / (maxLng - minLng) * mapWidth);
+    var y1 = Math.floor((loc1.latitude - minLat) / (maxLat - minLat) * mapHeight);
+    var x2 = Math.floor((loc2.longitude - minLng) / (maxLng - minLng) * mapWidth);
+    var y2 = Math.floor((loc2.latitude - minLat) / (maxLat - minLat) * mapHeight);
+
+    var s = 0.5 / (Math.abs(x2-x1) + Math.abs(y2-y1));
+
+    for(var a = 0; a <= 1; a += 0.01) {
+        var x = Math.floor(x1 * a + x2 * (1-a));
+        var y = Math.floor(y1 * a + y2 * (1-a));
+        
+        if(x < 0 || y < 0 || x >= mapWidth || y >= mapHeight)
+            continue;
+        if(map[x][y] == ' ') 
+            map[x][y] = char;
+    }
+}
+
 function printMap() {
     drawOnMap(initialStartStation.location, '🚩');
     drawOnMap(finalDestionationStation.location, '🏁');
     
-    for(var y = 0; y <= mapHeight; y++) {
+    for(var y = mapHeight - 1; y >= 0; y--) {
         var line = "";
         for(var x = 0; x <= mapWidth; x++) {
             line += map[x][y];
@@ -244,39 +392,7 @@ function printMap() {
 }
 
 async function getRandomStation() {
-    var station;
-    var keys = Object.keys(lines_at);
-    do {
-        var stationId = keys[Math.floor(Math.random() * keys.length)];
-        station = all_stations[stationId];
-        var lines = lines_at[station.id].filter(line => line.product == "subway" || line.product == "suburban");
-        if(station.name.indexOf("Berlin") == -1)
-            lines = [];
-    } while(lines.length == 0);
-    return station;
-}
-
-function testDrive() {
-    const startTime = new Date("2019-07-26T12:24:00").getTime() / 1000;
-    var timerange = [ [startTime - 5, 0], [startTime, 0.5], [startTime + 5, 1.0],  ];
-
-    console.log("Starting test drive");
-    printTimeRangeRelative(timerange);
-
-    const distances = [1, 2, 2, 1, 3, 5, 2, 1.5, 2.5, 1, 1, 4];
-
-    for(var i = 0; i < 12; i++) {
-        console.log("\nTraveled about " + distances[i] + " minutes.");
-        timerange = travel(timerange, travelTimeSpan, distances[i]);
-        timerange = travel(timerange, stopTimeSpan, 1);
-        printTimeRangeRelative(timerange);
-
-        if(i % 4 == 0) {
-            console.log("\nTrasfer!");
-            timerange = travel(timerange, transferTimeSpan, 1);
-            printTimeRangeRelative(timerange);
-        }
-    }
+    return berlinStations[Math.floor(Math.random() * berlinStations.length)];
 }
 
 function printTimeRange(time) {
@@ -289,6 +405,13 @@ function printTimeRange(time) {
         const p = interpolate(time, t);
         console.log(timestring(t) + printf(" %.4f   ",p) + "#".repeat(p * 100));
     }
+}
+
+
+async function getFullStationByName(name) {
+    const station = await find(name);
+    const full_start_station = stations[station.id];
+    return  full_start_station;
 }
 
 
@@ -308,6 +431,11 @@ function printTimeRangeRelative(time) {
         if(diff > maxDiff)
             maxDiff = diff;
     }
+
+    if(maxDiff == 0) {
+        console.log("Can't print this");
+        return;
+    }
      //          26.7.2019, 12:56:45     100.89%     100.89%     ##############
     console.log("DATE       TIME            PROB         CUMM      GRAPH");
     console.log("-------------------------------------------------------");
@@ -317,7 +445,13 @@ function printTimeRangeRelative(time) {
         const p2 = interpolate(time, t + s2);
         const diff = p2 - p1;
 
-        console.log(timestring(t) + printf("     % 7.2f%%     % 7.2f%%     ",diff * 100, p2 * 100) + "#".repeat(diff / maxDiff * 200));
+        var balken;
+        if(diff >= 0) 
+            balken = "#".repeat(diff / maxDiff * 200);
+        else
+            balken = "NEGATIV!";
+         console.log(timestring(t) + printf("     % 7.2f%%     % 7.2f%%     ",diff * 100, p2 * 100) + balken);
+        
     }
 }
 
@@ -345,199 +479,193 @@ function timespanstring(timespan) {
         }
     }
 
+    if((max10percent - median) < 0) {
+        printTimeRangeRelative(timespan);
+        console.log("WUTT?");
+    }
+
     return  new Date(median * 1000).toLocaleString() + printf(" ( -%.1f / +%.1f )", (median - min10percent) / 60, (max10percent - median) / 60);
 }
 
-async function processTask(task) {
-    const startStation = task.start;
-
-    if(!bestEta || task.estimatedWalkArrival < bestEta + 300) {
-        console.log("Starting from " + startStation.name + " at around " + timespanstring(task.timerange) + ", etwa "+task.distance+"m Fußweg verbleiben, ETA: " + timestring(task.estimatedWalkArrival) + " (zuvor: " + task.journey.legs.length +")");
+function printJourney(node) {
+    if(node.previousNode) {
+        printJourney(node.previousNode);
+        console.log("Ride with " + node.line.name + ", depart at " + timespanstring(node.prevDeparture));
     }
-
-    if(!bestEta || task.estimatedWalkArrival < bestEta) {
-        bestEta = task.estimatedWalkArrival;
-        console.log("NEW BEST JOURNEY:");
-
-        console.log("Starting from " + startStation.name + " at around " + timespanstring(task.timerange) + ", etwa "+task.distance+"m Fußweg verbleiben, ETA: " + timestring(task.estimatedWalkArrival) + " (zuvor: " + task.journey.legs.length +")");
-        if(task.distance == 0) {
-            console.log(util.inspect(task.journey, { depth: null}));
-
-            console.log("\n\nFound journey from " + initialStartStation.name + " to " + finalDestionationStation.name + ", starting at " + timestring(startTime));
-    
-
-            for(leg of task.journey.legs) {
-                console.log("\nRide with " + leg.scheduleName);
-                console.log("\nArrival at " + leg.destinationName);
-                printTimeRangeRelative(leg.arrivalTimeSpan);
-            }
-            //process.exit(0);
+    if(node.stops) {
+        for(var i = 0; i < node.stops.length - 1; i++) {
+            drawLine(stationByStop[node.stops[i]].location, stationByStop[node.stops[i+1]].location, '🔸');
         }
     }
-    
-    
-    const timerangeAtPlatform = travel(task.timerange, changePlatformTimeSpan, 1);
-    
-    //console.log("(" + heap.size() + ") Starting from " + startStation.name + " at " + timespanstring(timerangeAtPlatform) + ", about "+task.distance+"m walk, ETA: " + timestring(task.estimatedWalkArrival) + " (zuvor: " + task.history.join(" - ")  +")");
+    console.log("Start at " + node.station.name + " at " + timespanstring(node.arrival));
+}
 
+function printJourneyTable(node) {
+    var minTime = Infinity;
+    var maxTime = 0;
+
+    var nodes=[];
+    var curNode = node;
+    do {
+        if(curNode.arrival[0][0] < minTime)
+            minTime = curNode.arrival[0][0];
+        if(curNode.arrival[curNode.arrival.length - 1][0] > maxTime)
+            maxTime = curNode.arrival[curNode.arrival.length - 1][0];
+
+        nodes.push(curNode);
+        curNode = curNode.previousNode;
+    } while(curNode);
+    nodes.reverse();
+
+    minTime -= 60;
+    maxTime += 60;
+
+    var s = (maxTime - minTime) / 200;
+    var line = "\n\nTime";
+    for(curNode of nodes) {
+        if(curNode.prevDeparture) {
+            line += ";" + curNode.line.name;
+        }
+        line += ";" + curNode.station.name + " (an)";
+        if(curNode.arrivalOutgoingPlatform)
+          line += ";" + curNode.station.name + " (ab)";
+    }
+    console.log(line);
+
+    for(var t = minTime; t <= maxTime; t += s) {
+        var line = new Date(t*1000).toLocaleTimeString('it-IT');
+        
+        for(curNode of nodes) {
+            if(curNode.prevDeparture) {
+                line += ";" + interpolate(curNode.prevDeparture, t);
+            }
+            line += ";" + interpolate(curNode.arrival, t);
+            if(curNode.arrivalOutgoingPlatform)
+                line += ";" + interpolate(curNode.arrivalOutgoingPlatform, t);
+        }
+        console.log(line.replace(/\./g,","));
+    }
+}
+
+function processNode(node) {
+    if (node.station == finalDestionationStation) {
+        console.log("Reached target.");
+        printJourney(node);
+        printJourneyTable(node);
+        printTimeRangeRelative(node.arrival);
+        printMap();
+        process.exit(0);
+    }
+
+    addClosedNode(node);
+
+    const timerangeAtPlatform = travel(node.arrival, changePlatformTimeSpan, 1);
     const minTimestamp = timerangeAtPlatform[0][0]; // earliest time that we can arrive at startStation
     const maxTimestamp = timerangeAtPlatform[timerangeAtPlatform.length - 1][0]; // latest time that we can arrive at startStation
 
-    const start_stop_ids = startStation.stops.map( stop => stop.id);
+    if(timerangeAtPlatform[timerangeAtPlatform.length - 1][1] < 0.9) // chance that we ever arrive at the platform
+        return;
 
-    for (const key in all_schedules) {
-        if (all_schedules.hasOwnProperty(key)) {
-            const schedule = all_schedules[key];
-            
-            const route_stops = schedule.route.stops;
-            const intersection = route_stops.filter(id => start_stop_ids.indexOf(id) > -1);
+    node.arrivalOutgoingPlatform = timerangeAtPlatform;
 
-            if(intersection.length > 0) { // does this route have a stop at our current startStation station?
-                // first step of time filtering: only get trans which started their route within the last hour
-                const relevantSchedules = schedule.starts.filter(ts => ts >= minTimestamp - 80 * 60 && ts <= maxTimestamp + 20 * 60);
-                const line = linesById[schedule.route.line];
+    var cSchedules = 0;
+    var cStops = 0;
+    var cDepartures = 0;
+    var cMultitransfers = 0;
+
+    for (schedule of schedulesByStationId[node.station.id]) {
+        cSchedules ++;
+        const route_stops = schedule.route.stops;
+        const relevantStartTimes = schedule.starts.filter(ts => ts >= minTimestamp - 80 * 60 && ts <= maxTimestamp + 60 * 60);
+        if(relevantStartTimes.length == 0) {
+            continue;
+        }
+
+        
+        const line = linesById[schedule.route.line];
+        //onsole.log("Mode: " + util.inspect(line.product));
+        
+        var stopovers = [];
+
+        // walk the route until we hit our current startStation
+        var startStationIndex = -1;
+        for (var loopStationIndex = 0; loopStationIndex < route_stops.length; loopStationIndex++) {
+            cStops++;
+            var destinationStation = stationByStop[route_stops[loopStationIndex]];
+            if(!destinationStation) { // might be out of scope
+                continue;
+            }
+
+            if (startStationIndex != -1) { // are we past startStation on this route?
+                const destinationStationIndex = loopStationIndex;
                 
-                //const lastStopId = route_stops[route_stops.length - 1];
-                //console.log(line.name + " nach " + getStopName(lastStopId) + "("+ route_stops.length + " Halte)");
+                var connectingLines = lines_at[destinationStation.id];
+                var destinameNode = nodeByStationId[destinationStation.id];
+                if(closedNodes.includes(destinameNode)) {
+                    continue;
+                }
 
-                var stopovers = [];
+                // actually, we include subways and suburban trains now. Exclude the line that we are currently on.
+                var otherSuitableLines = connectingLines.filter(conline => (conline.product == "subway" || conline.product == "suburban") && conline.name != line.name);
 
-                // walk the route until we hit our current startStation
-                var startStationIndex = -1;
-                for(var loopStationIndex = 0; loopStationIndex < route_stops.length; loopStationIndex++) {
-                    var station = stationByStop[route_stops[loopStationIndex]];
+                // how long does it usually take to drive from startStation to destinationStation?
+                var minutes = (schedule.sequence[destinationStationIndex].departure - schedule.sequence[startStationIndex].departure) / 60;
 
-                    if(startStationIndex != -1) { // are we past startStation on this route?
-                        if(loopStationIndex > startStationIndex + 4) { // THIS IS GONNA BE FUN!
-                          //  break;
+                // Is it plausible to get off here? Only if we can transfer, we are at our destination 
+                if (otherSuitableLines.length > 0 || destinationStation == finalDestionationStation) {
+                    var departures = [];
+                    for (const routeStartTime of relevantStartTimes) {
+                        cDepartures++;
+                        // scheduled time for departure from startStation
+                        var scheduledDepartureTime = routeStartTime + schedule.sequence[startStationIndex].departure;
+
+                        // rule out any departures that are too early or too late to be relevant
+                        if (scheduledDepartureTime < minTimestamp - 800 || scheduledDepartureTime > maxTimestamp + 3600) {
+                            continue;
                         }
 
-                        const destinationStationIndex = loopStationIndex;
-                        const destinationStation = station;
-
-                        var connectingLines = lines_at[destinationStation.id];
-
-                        // actually, we include subways and suburban trains now. Exclude the line that we are currently on.
-                        var otherSubways = connectingLines.filter(conline => (conline.product == "subway" || conline.product == "suburban") && conline.name != line.name);
-
-                        // how long does it usually take to drive from startStation to destinationStation?
-                        var minutes = (schedule.sequence[destinationStationIndex].departure - schedule.sequence[startStationIndex].departure) / 60;
-
-                        // Is it plausible to get off here? Only if we can transfer, we are at our destination //, or close enough to try walking from here - actually, fuck walking
-                        if(otherSubways.length > 0 || destinationStation == finalDestionationStation) { // || distBetweenStations(destinationStation, finalDestionationStation) < 1400) {
-                            var linesString = otherSubways.map(line => line.name).join(", ");
-
-                            
-                            //var printedHeader = false;
-                            var departures = [];
-                            for (const routeStartTime of relevantSchedules) {
-                                // scheduled time for departure from startStation
-                                var scheduledDepartureTime = routeStartTime + schedule.sequence[startStationIndex].departure;
-                                
-                                
-                                // rule out any departures that are too early or too late to be relevant
-                                if(scheduledDepartureTime < minTimestamp - 180 || scheduledDepartureTime > maxTimestamp + 3600) {
-                                    continue;
-                                }
-
-                                // get a very exact time range
-                                const scheduledDepartureTimeRange = [ [scheduledDepartureTime - 5, 0.0], [scheduledDepartureTime + 5, 1.0] ];
-                                // then make it fuzzy
-                                const departureTime = travel(scheduledDepartureTimeRange, departureTimeSpan, 1);
-                                departures.push(departureTime);
-                            }
-
-                            if(departures.length > 0)
-                            {
-                                //console.log("   " + departures.length + " departures for train " + line.name + ", " + minutes + " minutes to " + destinationStation.name + (linesString.length > 0 ? (" (transfer to "+linesString+")") : ""));
-                                
-                                var desc = line.name + " von " + startStation.name + " nach " + destinationStation.name;
-                                
-                                const aggregateDepartureTime = multitransfer(timerangeAtPlatform, departures);
-                                const arrivalTime = travel(aggregateDepartureTime, travelTimeSpan, minutes);
-
-                                assert(arrivalTime.length < maxDataPoints + 1);
-                                //console.log("        Departue at " + timespanstring(aggregateDepartureTime));
-                                //printTimeRangeRelative(aggregateDepartureTime);
-                                //console.log("        Arrival  at " + timespanstring(arrivalTime));
-                                //printTimeRangeRelative(arrivalTime);
-
-                                var simpleDepartureTime = getExpectedTime(aggregateDepartureTime);
-
-                                var newJourney = cloneDeep(task.journey);
-                                newJourney.id = nextJourneyId++;
-
-                                var newStopovers = cloneDeep(stopovers);
-                                for (const stopover of stopovers) {
-                                    stopover.departure = new Date((simpleDepartureTime + stopover.minutes * 60)*1000).toISOString();
-                                }
-
-                                newJourney.legs.push({
-                                    // - station/stop/location id or object
-                                    // - required
-                                    origin: startStation.id,
-
-                                    originName: startStation.name,
-
-                                    // station/stop/location id or object
-                                    // - required
-                                    destination: destinationStation.id,
-
-                                    destinationName: destinationStation.name,
-
-                                    // - ISO 8601 string (with origin timezone)
-                                    // - required
-                                    departure: new Date(simpleDepartureTime * 1000).toISOString(),
-
-                                    departureTimeSpan: aggregateDepartureTime,
-
-                                    // - ISO 8601 string (with destination timezone)
-                                    // - required
-                                    arrival: new Date(getExpectedTime(arrivalTime)*1000).toISOString(),
-
-                                    arrivalTimeSpan: arrivalTime,
-
-                                    // - array of stopover objects
-                                    // - optional
-                                    stopovers: newStopovers,
-
-                                    // - schedule id or object
-                                    // - optional
-                                    schedule: schedule.id,
-
-                                    scheduleName: linesById[schedule.route.line].name + " [heading to " + getStopName(schedule.route.stops[schedule.route.stops.length - 1]) + "]",
-
-                                    public: true, // is it publicly accessible?
-                                });
-
-                                addTask(arrivalTime, destinationStation, newJourney);
-                            }
-                        }
-                        stopovers.push({
-                            type: 'stopover', // required
-
-                            // - stop/station id or object
-                            // - required
-                            stop: station.id,
-
-                            minutes: minutes
-                        });
+                        // get a very exact time range
+                        const scheduledDepartureTimeRange = [[scheduledDepartureTime - 5, 0.0], [scheduledDepartureTime + 5, 1.0]];
+                        // then make it fuzzy
+                        const departureTime = travel(scheduledDepartureTimeRange, departureTimeSpans[line.product], 1, 0.99);
+                        departures.push(departureTime);
                     }
-                    if(station == startStation) {
-                        startStationIndex = loopStationIndex;
+
+                    if (departures.length > 0) {
+                        cMultitransfers++;
+                        const aggregateDepartureTime = multitransfer(timerangeAtPlatform, departures);
+                        if(aggregateDepartureTime.length == 0)
+                            continue;
+                        const steps = 1; //Math.ceil(minutes / 4);
+                        var arrivalTime = aggregateDepartureTime;
+                        for(var i = 0; i < steps; i++)
+                            arrivalTime = travel(arrivalTime, travelTimeSpans[line.product], minutes / steps);
+
+                            if(!checkPlausibility(timerangeAtPlatform, aggregateDepartureTime)) console.log("^ A");
+                            if(!checkPlausibility(aggregateDepartureTime, arrivalTime)) console.log("^ B");
+
+                        addOpenNode(destinameNode, arrivalTime, node, line, aggregateDepartureTime, route_stops.slice(startStationIndex, loopStationIndex + 1));
                     }
                 }
             }
+            if (destinationStation == node.station) {
+                startStationIndex = loopStationIndex;
+            }
+
         }
     }
+    console.log("STARTING AT " + node.station.name);
+    console.log("Schedules: " + cSchedules);
+    console.log("Stops: " + cStops);
+    console.log("Departures: " + cDepartures);
+    console.log("Multitransfers: " + cMultitransfers);
 }
+
 
 function multitransfer(arrival, departures) {
     var combinedDeparture = [];
 
-    //departures.sort( (d1, d2) => d1[d1.length - 1] - d2[d2.length - 1]);
-
-    const minArrivalTime = arrival[1][0];
+    const minArrivalTime = arrival[0][0];
     const maxArrivalTime = arrival[arrival.length-1][0];
 
     const minDepartureTime = departures.map(d => d[0][0]).reduce( (a,b) => Math.min(a,b));
@@ -546,43 +674,114 @@ function multitransfer(arrival, departures) {
     const s = globalResolution;
     const s2 = s / 2;
 
-    var pStillThere = 1;
+    
 
-    for(var t = minDepartureTime; t <= maxDepartureTime; t += s) {
-        combinedDeparture.push( [t, 0] );
-    }
+    var somethingStrange = false; // set to true to trigger debug at the end
 
-    for(var ta = minArrivalTime; ta <= maxArrivalTime; ta += s) {
-        var pArrival = interpolate(arrival, ta) - interpolate(arrival, ta - s); // Wahrscheinlichkeit, dass ich in diesem Zeitpunkt ankomme
-        if(ta == minArrivalTime)
-            pArrival = 0;
-        
-       // vorausgesetzt, ich bin seit genau $ta da
-        
-        for(var t = ta; t <= maxDepartureTime; t += s) {
-            var pStillThere = 1;
-            for (const departure of departures) {     
-                const pd = interpolate(departure, t) - interpolate(departure, ta); // Wahrscheinlichkeit, dass dieser Zug zwischen ta und t abgefahren ist
-                pStillThere = pStillThere * (1 - pd);
-            }
+    var arrTrainNow = [];
 
-            //console.log("Still there at " + timestring(t) + " with p = " + pStillThere);
+    var pOverallSum = 0; 
+
+    for(var td = minArrivalTime; td <= maxDepartureTime; td += s) {
+        // Betrachung für jeden Zeitpunkt td, zu dem ein Zug abfahren könnte
            
-            for(var i = 0; i < combinedDeparture.length; i++) {
-                if(combinedDeparture[i][0] >= t) {
-                    combinedDeparture[i][1] += pArrival * (1 - pStillThere);
-                    break;
-                }
+        var pSum = 0; // Wahrscheinlichkeit, dass ich jetzt abfahre
+
+        for(var ta = minArrivalTime; ta <= td; ta += s) {
+            // Betrachtung für jeden Zeitpunkt, an dem ich am Bahnsteig ankommen könnte
+            var pArriveNow = interpolate(arrival, ta) - interpolate(arrival, ta - s);
+
+
+            var pNoDep = 1.0; // Wahrscheinlichkeit, dass bis jetzt noch nicht abgefahren bin
+
+            for (const departure of departures) {    
+                var pGoneBefore = interpolate(departure, ta);
+                var pGoneNow = interpolate(departure, td);
+                pNoDep *= 1 - (pGoneNow - pGoneBefore);
             }
+
+            var pDep = 1 - pNoDep; // Wahrscheinlichkeit, dass ich bis jetzt abgefahren bin
+
+            
+            pSum += pDep * pArriveNow; // Gewichtete Summe über verschiedene Ankunftszeiten ta für diese eine Abfahrtszeit td
+
+           
+            //console.log("Ankunft " + timestring(ta) + ": " + pSum);
+        }
+
+
+        if(pSum > interpolate(arrival, td)) {
+            console.log("Hurz!");
+        }
+
+        //pOverallSum += pSum; // Summe für alle bisherigen Abfahrtszeiten td
+        combinedDeparture.push( [td, pSum] );
+        //console.log("Um " + timestring(td) + ": " + pSum);
+    }
+ 
+    return simplify(combinedDeparture);
+}
+
+function checkPlausibility(r1, r2) {
+    const minTime = Math.min(r1[0][0],r2[0][0]);
+    const maxTime = Math.max(r1[r1.length-1][0],r2[r2.length-1][0]);
+
+    for(var t = minTime; t <= maxTime; t += globalResolution) {
+        if(interpolate(r1, t) < interpolate(r2,t) - 0.01) {
+            console.log("Inplausible at " + timestring(t) + ":");
+            printTimeRange(r1);
+            console.log("----");
+            printTimeRange(r2);
+            return false;
         }
     }
-   
-    combinedDeparture = simplify(combinedDeparture);
+    return true;
+}
 
-   if(arrival[0][0] > combinedDeparture[0][0]) {
-        console.log("\n\nTime;Arrival;Combined Departure;Individual Departures;");
+function oldMultitransfer(arrival, departures) {
+    var combinedDeparture = [];
+
+    const minArrivalTime = arrival[0][0];
+    const maxArrivalTime = arrival[arrival.length-1][0];
+
+    const minDepartureTime = departures.map(d => d[0][0]).reduce( (a,b) => Math.min(a,b));
+    const maxDepartureTime = departures.map(d => d[d.length-1][0]).reduce((a,b) => Math.max(a,b));
+
+    const s = globalResolution;
+    const s2 = s / 2;
+
+    var pSum = 0;
+
+    var somethingStrange = false; // set to true to trigger debug at the end
+
+    var arrTrainNow = [];
+
+    for(var t = minArrivalTime; t <= maxDepartureTime; t += s) {
+        var pNoDep = 1.0; // Wahrscheinlichkeit, dass in diesem Moment kein Zug abfährt
+        var pAlreadyThere = interpolate(arrival, t);
+
+        for (const departure of departures) {     
+            const pt = interpolate(departure, t) - interpolate(departure, t - s); // Wahrscheinlichkeit, dass dieser Zug jetzt abfährt
+            pNoDep = pNoDep * (1-pt);
+        }
+        var pDep = 1 - pNoDep; // Wahrscheinlichkeit, dass in diesem Moment mindestens ein Zug losfährt
+       
+        pSum += pDep * (pAlreadyThere - pSum);
+        combinedDeparture.push( [t, pSum] );
+        arrTrainNow.push( [t, pDep] );
+    }
+   
+   
+    // combinedDeparture = simplify(combinedDeparture);
+
+    if(somethingStrange) {
+        console.log(somethingStrange);
+        console.log("\n\nTime;Arrival;Train now;Combined Departure;Individual Departures;");
         for(var t = minArrivalTime; t <= maxDepartureTime; t += s) {
-            var line = printf("%s;%f;%f", new Date(t*1000).toLocaleTimeString('it-IT'), interpolate(arrival, t), interpolate(combinedDeparture, t));
+            var line = new Date(t*1000).toLocaleTimeString('it-IT') + ";" 
+                     + interpolate(arrival, t) + ";"
+                     + interpolate(arrTrainNow, t) + ";"
+                     + interpolate(combinedDeparture, t);
             for (const departure of departures) {     
                 line += printf(";%f", interpolate(departure, t));
             }
@@ -595,15 +794,15 @@ function multitransfer(arrival, departures) {
             i++; 
             printTimeRange(departure);
         }
-
+        console.log("Why that?");
     }
-
-    
-    
+ 
     return combinedDeparture;
 }
 
 function simplify(timespan) {
+    //console.log("Before: " + timespanstring(timespan));
+    var ret = [];
     var firstSignificant = 0;
     for(var i = 1; i < timespan.length; i++) {
         if(i > 0 && timespan[i][1] > 0.005 && firstSignificant == 0) {
@@ -611,7 +810,7 @@ function simplify(timespan) {
             firstSignificant = i - 1;
         }
         if(timespan[i][1] > 0.995 || i == timespan.length - 1) {
-            ret = timespan.slice(firstSignificant, i).concat( [[ timespan[i][0], 1 ]]);
+            ret = timespan.slice(firstSignificant, i); // .concat( [[ timespan[i][0], 1 ]]);
             break;
         }
     }
@@ -631,6 +830,9 @@ function simplify(timespan) {
         ret = newRet;
     }
 
+    //console.log("After : " + timespanstring(ret));
+    
+
     return ret;
 }
 
@@ -639,68 +841,12 @@ function distBetweenStations(s1, s2) {
     return geodist( {lat: s1.location.latitude , lng: s1.location.longitude }, {lat: s2.location.latitude , lng: s2.location.longitude }, {unit:"meters"})
 }
 
-function addTask(timerange, station, journey) {
-    drawOnMap(station.location, '💚');
-    
-
-    //console.log("Add task for " + station.name);
-    var stationRecord = reachableStations[station.id];
-    if(!stationRecord) {
-        var distance = distBetweenStations(station, finalDestionationStation);
-        stationRecord = {
-            station: station,
-            minEtaHere: Infinity,
-            minEtaFinal: Infinity,
-            distance: distance,
-            taskHeap: new FibonacciHeap()
-        };
-        reachableStations[station.id] = stationRecord;
-       
-       // stationHeap.insert(stationRecord.minEtaFinal, stationRecord);
-    }
-    
-    const task = {
-        start : station,
-        timerange : timerange,
-        journey: journey,
-        distance: stationRecord.distance,
-        estimatedStart  : getExpectedTime(timerange),
-        estimatedWalkArrival  : getExpectedTime(timerange) + stationRecord.distance,
-        estimatedDriveArrival : getExpectedTime(timerange) + stationRecord.distance / 27,
-    };
-
-    stationRecord.taskHeap.insert(task.estimatedDriveArrival, task);
-    if(task.estimatedDriveArrival < stationRecord.minEtaFinal) {
-        stationRecord.minEtaFinal = task.estimatedDriveArrival;
-       // stationHeap.decreaseKey(stationRecord, stationRecord.minEtaFinal);
-    }
-    if(task.estimatedStart < stationRecord.minEtaHere) {
-        stationRecord.minEtaHere = task.estimatedStart;
-    }
-
-    
-    
-}
-
 function getExpectedTime(timerange) {
     // TODO this is not the expected value, but some kind of median
     for(var i = 0; i < timerange.length; i++) {
         if(timerange[i][1] >= 0.5)
             return timerange[i][0];
     }
-}
-
-
-async function getFullStationByName(name) {
-    const station = await find(name);
-    const full_start_station = stations[station.id];
-    return  full_start_station;
-}
-
-async function getStopsFromStationName(name) {
-    const station = await find(name);
-    const full_start_station = stations[station.id];
-    return  full_start_station.stops.map( stop => stop.id);
 }
 
 async function getSchedulesForProduct(product) {
@@ -720,20 +866,28 @@ async function getSchedulesForProduct(product) {
     return product_schedules;
 }
 
-
 function indexStops() {
-    for (const key in all_stations) {
-        if (all_stations.hasOwnProperty(key)) {
-            const station = all_stations[key];
-            for (const stopKey in station.stops) {
-                if (station.stops.hasOwnProperty(stopKey)) {
-                    const stop = station.stops[stopKey];
-                    stationByStop[stop.id] = station;
-                }
+    for(station of berlinStations) {
+        for (const stopKey in station.stops) {
+            if (station.stops.hasOwnProperty(stopKey)) {
+                const stop = station.stops[stopKey];
+                stationByStop[stop.id] = station;
             }
         }
     }
-    
+}
+
+function initNodes() {
+    for(station of berlinStations) {
+        nodeByStationId[station.id] = {
+            station : station,
+            arrival : null,
+            arrivalExp : null,
+            distance : distBetweenStations(station, finalDestionationStation),
+            heuristic : null,
+            journey : null
+        };
+    }
 }
 
 function getStopName(stopId) {
@@ -743,52 +897,9 @@ function getStopName(stopId) {
     return stopNames[stopId];
 }
 
-function transfer(arrival, departure, transferTime) {
-    var ret = [];
-
-    var ts = Math.min(arrival[0][0], departure[0][0]);
-    var te = Math.max(arrival[arrival.length - 1][0], departure[departure.length - 1][0]);
-
-    var p_sum = 0;
-
-    for(var t = ts; t <= te; t += globalResolution) {
-        const pa = interpolate(arrival, t-transferTime);   // Wahrscheinlichkeit, dass man bis jetzt angekommen ist
-        const pd = interpolate(departure, t); // Wahrscheinlichkeit, dass der Anschluss bis jetzt schon abgefahren ist
-        //console.log("t" + t + ": " + interpolate(arrival, t)  + " / " + interpolate(departure, t));
-        const p = pa * (1-pd) * (1 - p_sum); // Wahrscheinlichkeit, dass man jetzt losfährt 
-        p_sum += p; // Wahrscheinlichkeit, dass man bis jetzt irgendwie weggefahren ist
-        ret.push([t, p]);
-    }
-
-    var firstSignificant = 0;
-    for(var i = 1; i < ret.length; i++) {
-        ret[i][1] += ret[i-1][1];
-        if(i > 0 && ret[i][1] > 0.002 && firstSignificant == 0) {
-            ret[i - 1][1] = 0;
-            firstSignificant = i - 1;
-        }
-        if(ret[i][1] > 0.99 || i == ret.length - 1) {
-            ret = ret.slice(firstSignificant, i).concat( [[ ret[i][0], 1 ]]);
-            break;
-        }
-    }
-
-    console.log("\nARRIVAL");
-    printTimeRange(arrival);
-
-    console.log("\nDEPARTURE");
-    printTimeRange(departure);
-
-    console.log("\nTRANSFER");
-    printTimeRange(ret);
-
-
-    return ret;
-}
-
 function interpolate(map, t) {
-    assert(map[0][1] == 0.0);
-    assert(map[map.length - 1][1] == 1.0);
+    //assert(map[0][1] == 0.0);
+    //assert(map[map.length - 1][1] == 1.0);
     
     for(var i = 0; i < map.length; i++) {
         if(map[i][0] > t) {
@@ -807,15 +918,15 @@ function interpolate(map, t) {
     return map[map.length - 1][1];
 }
 
-function travel(start, duration, multiplier) {
+function travel(start, duration, timeMultiplier, pMultiplier = 1) {
     var ret = [];
 
     var startMin = start[0][0];
     var startMax = start[start.length - 1][0];
     var durationMin = duration[0][0];
     var durationMax = duration[duration.length - 1][0];
-    var realDurationMin = durationMin * multiplier;
-    var realDurationMax = durationMax * multiplier;
+    var realDurationMin = durationMin * timeMultiplier;
+    var realDurationMax = durationMax * timeMultiplier;
 
     var ret = [];
 
@@ -828,30 +939,21 @@ function travel(start, duration, multiplier) {
 
     for(var tStart = startMin; tStart <= startMax; tStart += s) {
         for(var tDuration = durationMin; tDuration <= durationMax; tDuration += s) {
-            t = tStart + tDuration * multiplier;
+            t = tStart + tDuration * timeMultiplier;
             const pStart    = interpolate(start, tStart - s2) - interpolate(start, tStart + s2);  
             const pDuration = interpolate(duration, tDuration - s2) - interpolate(duration, tDuration  + s2);
             const p = pStart * pDuration;
             for (const pair of ret) {
                 if(pair[0] >= t) {
-                    pair[1] += p;
+                    pair[1] += p * pMultiplier;
                     break;
                 }
             }
         }
     }
 
-    var firstSignificant = 0;
     for(var i = 1; i < ret.length; i++) {
         ret[i][1] += ret[i-1][1];
-        /*
-        if(i > 0 && ret[i][1] > 0.002 && firstSignificant == 0) {
-            ret[i - 1][1] = 0;
-            firstSignificant = i - 1;
-        }
-        if(ret[i][1] > 0.998) {
-            return ret.slice(firstSignificant, i).concat( [[ ret[i][0], 1 ]]);
-        }*/
     }
 
     return simplify(ret);
