@@ -12,6 +12,10 @@ const cloneDeep = require('lodash.clonedeep');
 const process = require('process');
 const FibonacciHeap = require('@tyriar/fibonacci-heap').FibonacciHeap;
 const toArray = require('stream-to-array');
+// server.js
+// load the server resource and route GET method
+const server = require('server')
+const { get, socket } = require('server/router')
 
 var all_schedules;
 
@@ -28,22 +32,6 @@ var startTime;
 var nodeByStationId = {};
 var openNodes = [];
 var closedNodes = [];
-
-/*
-var departureTimeSpan = [
-    [-120 , 0],
-    [ -60 , 0.05],  
-    [ -30 , 0.15],
-    [   0 , 0.6],
-    [  30 , 0.8],
-    [  60 , 0.85],
-    [ 120 , 0.90],
-    [ 180 , 0.92],
-    [ 300 , 0.95],
-    [ 600 , 0.98],
-    [1200 , 1.0]
-];*/
-
 
 var departureTimeSpans = {
     "bus": [
@@ -229,45 +217,94 @@ var berlinStations = [];
         //initialStartStation = await getRandomStation();
         //finalDestionationStation = await getRandomStation();
 
-        initNodes();
         //printMap();
-
+        /*
         startTime = new Date("2019-07-26T11:00:00").getTime() / 1000; // + (Math.random() * 7 * 24 * 60 * 60);
+        const timerange = [ 
+            [startTime - globalResolution / 2, 0.0], 
+            [startTime + globalResolution / 2, 1.0],
+            [startTime + globalResolution * 20, 1.0]
+        ];
+    
+        initNodes();
+
+        addOpenNode(nodeByStationId[initialStartStation.id], timerange, null, "losgehen");
+        performSearch();
+        */
+    }
+})();
+
+function performSearch() {
+    if (openNodes.length > 0) {
+        console.log("START: " + initialStartStation.name);
+        console.log("FINAL: " + finalDestionationStation.name);
+        console.log("open nodes: " + openNodes.length);
+        console.log("closed nodes: " + closedNodes.length);
+        /*
+        for(node of openNodes) {
+            drawOnMap(node.station.location, '💚');
+        }for(node of closedNodes) {
+            drawOnMap(node.station.location, '💙');
+        }
+        
+        for(var i = 0; i < 8 && i < openNodes.length; i++) {
+            var char = "123456789"[i];
+            drawOnMap(openNodes[openNodes.length - i - 1].station.location, char);
+        }
+
+        //for(node of openNodes) {
+        //    console.log(timestring(node.heuristic) + " " + node.station.name);
+        //}
+        printMap();
+        */
+        var node = openNodes.pop();
+        processNode(node);
+        setImmediate(() => {
+            performSearch();
+        })
+    }
+}
+
+var globalIo;
+
+function sendMessage(text) {
+    globalIo.emit("message", text);
+};
+
+// get server port from environment or default to 3000
+const port = process.env.PORT || 3000
+server({ port }, [
+    get('/', ctx => '<h1>Hello you!</h1>'),
+    socket('message', ctx => {
+        // Send the message to every socket
+        ctx.io.emit('message', ctx.data)
+    }),
+    socket('startSearch', ctx => {
+
+        console.log("Shall start seach: " + util.inspect(ctx.data));
+        ctx.io.emit('message', "Suche wird bald beginnen…");
+        initBerlinStations = stations[ctx.data.startStation.id];
+        finalDestionationStation = stations[ctx.data.destionationStation.id];
+        startTime = new Date(ctx.data.selectedDate).getTime() / 1000;
+        // TODO use .time
         const timerange = [
             [startTime - globalResolution / 2, 0.0],
             [startTime + globalResolution / 2, 1.0],
             [startTime + globalResolution * 20, 1.0]
         ];
-
+        initNodes();
 
         addOpenNode(nodeByStationId[initialStartStation.id], timerange, null, "losgehen");
-
-        while (openNodes.length > 0) {
-            console.log("START: " + initialStartStation.name);
-            console.log("FINAL: " + finalDestionationStation.name);
-            console.log("open nodes: " + openNodes.length);
-            console.log("closed nodes: " + closedNodes.length);
-            for (node of openNodes) {
-                drawOnMap(node.station.location, '💚');
-            } for (node of closedNodes) {
-                drawOnMap(node.station.location, '💙');
-            }
-
-            for (var i = 0; i < 8 && i < openNodes.length; i++) {
-                var char = "123456789"[i];
-                drawOnMap(openNodes[openNodes.length - i - 1].station.location, char);
-            }
-
-            //for(node of openNodes) {
-            //    console.log(timestring(node.heuristic) + " " + node.station.name);
-            //}
-            printMap();
-
-            var node = openNodes.pop();
-            processNode(node);
-        }
-    }
-})();
+        performSearch();
+        ctx.io.emit('message', "Suche hat begonnen.");
+    }),
+    socket('connect', ctx => {
+        globalIo = ctx.io;
+        console.log('client connected', Object.keys(ctx.io.sockets.sockets))
+        ctx.io.emit('count', { msg: 'HI U', count: Object.keys(ctx.io.sockets.sockets).length })
+    })
+])
+    .then(() => console.log(`Server running at http://localhost:${port}`))
 
 
 function initBerlinStations() {
@@ -310,7 +347,7 @@ function addOpenNode(node, arrival, previousNode, line, prevDeparture, stops) {
     }
     node.arrival = arrival;
     node.arrivalExp = getExpectedTime(arrival);
-    node.heuristic = node.arrivalExp + node.distance / 10;
+    node.heuristic = node.arrivalExp + node.distance / 20;
     node.previousNode = previousNode;
     node.line = line;
     node.prevDeparture = prevDeparture;
@@ -548,13 +585,17 @@ function printJourneyTable(node) {
 }
 
 function processNode(node) {
+    sendMessage("Untersuche " + node.station.name);
     if (node.station == finalDestionationStation) {
         console.log("Reached target.");
         printJourney(node);
         printJourneyTable(node);
         printTimeRangeRelative(node.arrival);
         printMap();
-        process.exit(0);
+        // process.exit(0);
+        sendMessage("Fertig!");
+        openNodes = [];
+        return;
     }
 
     addClosedNode(node);
@@ -674,12 +715,8 @@ function multitransfer(arrival, departures) {
     const s = globalResolution;
     const s2 = s / 2;
 
-
-
     var somethingStrange = false; // set to true to trigger debug at the end
-
     var arrTrainNow = [];
-
     var pOverallSum = 0;
 
     for (var td = minArrivalTime; td <= maxDepartureTime; td += s) {
@@ -701,14 +738,9 @@ function multitransfer(arrival, departures) {
             }
 
             var pDep = 1 - pNoDep; // Wahrscheinlichkeit, dass ich bis jetzt abgefahren bin
-
-
             pSum += pDep * pArriveNow; // Gewichtete Summe über verschiedene Ankunftszeiten ta für diese eine Abfahrtszeit td
-
-
             //console.log("Ankunft " + timestring(ta) + ": " + pSum);
         }
-
 
         if (pSum > interpolate(arrival, td)) {
             console.log("Hurz!");
