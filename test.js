@@ -23,15 +23,8 @@ var linesById = {};
 var scheduleArray = toArray(trips.schedules());
 //var stopNames = {};
 var stationByStop = {};
-
-var initialStartStation;
-var finalDestionationStation;
-var startTime;
-
-
 var nodeByStationId = {};
-var openNodes = [];
-var closedNodes = [];
+var currentSearches = {};
 
 var departureTimeSpans = {
     "bus": [
@@ -170,98 +163,65 @@ var schedulesByStationId = {};
 var berlinStations = [];
 
 (async () => {
-
-    if (false) {
-        var t = 0; // new  Date("2019-07-26T11:00:00").getTime() / 1000;
-
-        var timerangeAtPlatform = [[t + 1600, 0.0], [t + 1860, 1.0]]
-
-        var departures = [];
-        for (const routeStartTime of [t + 300, t + 600, t + 900]) {
+    console.log("Preprocessing data");
+    initBerlinStations();
+    indexStops();
+    initMap();
 
 
-            // get a very exact time range
-            const scheduledDepartureTimeRange = [[routeStartTime - 5, 0.0], [routeStartTime + 5, 1.0]];
-            // then make it fuzzy
-            const departureTime = travel(scheduledDepartureTimeRange, departureTimeSpans["subway"], 1);
-            departures.push(departureTime);
+    console.log("Searching schedules");
+    var subway_schedules = await getSchedulesForProduct("subway");
+    var sbahn_schedules = await getSchedulesForProduct("suburban");
+    all_schedules = subway_schedules.concat(sbahn_schedules);
 
-            printTimeRangeRelative(departureTime);
+    indexSchedules();
 
-        }
-
-        const aggregateDepartureTime = multitransfer(timerangeAtPlatform, departures);
-
-        printTimeRangeRelative(timerangeAtPlatform);
-        printTimeRangeRelative(aggregateDepartureTime);
-    } else {
-
-        console.log("Preprocessing data");
-        initBerlinStations();
-        indexStops();
-        initMap();
-
-
-        console.log("Searching schedules");
-        var subway_schedules = await getSchedulesForProduct("subway");
-        var sbahn_schedules = await getSchedulesForProduct("suburban");
-        all_schedules = subway_schedules.concat(sbahn_schedules);
-
-        indexSchedules();
-
-        initialStartStation = await getFullStationByName("U Siemensdamm (Berlin)");
-        finalDestionationStation = await getFullStationByName("U Weberwiese (Berlin)");
-
-        //finalDestionationStation = await getFullStationByName("S+U Wedding (Berlin)");
-
-        //initialStartStation = await getRandomStation();
-        //finalDestionationStation = await getRandomStation();
-
-        //printMap();
-        /*
-        startTime = new Date("2019-07-26T11:00:00").getTime() / 1000; // + (Math.random() * 7 * 24 * 60 * 60);
-        const timerange = [ 
-            [startTime - globalResolution / 2, 0.0], 
-            [startTime + globalResolution / 2, 1.0],
-            [startTime + globalResolution * 20, 1.0]
-        ];
-    
-        initNodes();
-
-        addOpenNode(nodeByStationId[initialStartStation.id], timerange, null, "losgehen");
-        performSearch();
-        */
-    }
+    startServer();
 })();
 
-function performSearch() {
-    if (openNodes.length > 0) {
-        console.log("START: " + initialStartStation.name);
-        console.log("FINAL: " + finalDestionationStation.name);
-        console.log("open nodes: " + openNodes.length);
-        console.log("closed nodes: " + closedNodes.length);
-        /*
-        for(node of openNodes) {
-            drawOnMap(node.station.location, '💚');
-        }for(node of closedNodes) {
-            drawOnMap(node.station.location, '💙');
-        }
-        
-        for(var i = 0; i < 8 && i < openNodes.length; i++) {
-            var char = "123456789"[i];
-            drawOnMap(openNodes[openNodes.length - i - 1].station.location, char);
-        }
+/*
+var exampleSearch = {
+    searchId = "fo39fhjs",
+    startStation: {
+        id: 323,
+    },
+    destionationStation: {
+        id: 8493,
+    },
+    selectedDate: new Date("2019-07-26T11:00:00"),
+    time: "12:00",
+    openNodes: [],
+    closedNodes: [],
+  };
+*/
 
-        //for(node of openNodes) {
-        //    console.log(timestring(node.heuristic) + " " + node.station.name);
-        //}
-        printMap();
-        */
-        var node = openNodes.pop();
-        processNode(node);
+function initiateSearch(search) {
+    search.openNodes = [];
+    search.closedNodes = [];
+    search.nodeByStationId = {};
+    currentSearches[search.searchId] = search;
+
+    // TODO use .time
+    const timerange = [
+        [search.startTime - globalResolution / 2, 0.0],
+        [search.startTime + globalResolution / 2, 1.0],
+        [search.startTime + globalResolution * 20, 1.0]
+    ];
+    initNodes(search);
+
+    addOpenNode(search, search.nodeByStationId[search.initialStartStation.id], timerange, null, "losgehen");
+    performSearchStep(search);
+}
+
+function performSearchStep(search) {
+    if (search.openNodes.length > 0) { 
+        var node = search.openNodes.pop();
+        processNode(search, node);
         setImmediate(() => {
-            performSearch();
+            performSearchStep(search);
         })
+    } else {
+        sendMessage("Suche abgeschlossen");
     }
 }
 
@@ -271,41 +231,38 @@ function sendMessage(text) {
     globalIo.emit("message", text);
 };
 
-// get server port from environment or default to 3000
-const port = process.env.PORT || 3000
-server({ port }, [
-    get('/', ctx => '<h1>Hello you!</h1>'),
-    socket('message', ctx => {
-        // Send the message to every socket
-        ctx.io.emit('message', ctx.data)
-    }),
-    socket('startSearch', ctx => {
+function startServer() {
+    // get server port from environment or default to 3000
+    const port = process.env.PORT || 3000
+    server({ port }, [
+        get('/', ctx => '<h1>Hello you!</h1>'),
+        socket('message', ctx => {
+            // Send the message to every socket
+            ctx.io.emit('message', ctx.data)
+        }),
+        socket('startSearch', ctx => {
 
-        console.log("Shall start seach: " + util.inspect(ctx.data));
-        ctx.io.emit('message', "Suche wird bald beginnen…");
-        initBerlinStations = stations[ctx.data.startStation.id];
-        finalDestionationStation = stations[ctx.data.destionationStation.id];
-        startTime = new Date(ctx.data.selectedDate).getTime() / 1000;
-        // TODO use .time
-        const timerange = [
-            [startTime - globalResolution / 2, 0.0],
-            [startTime + globalResolution / 2, 1.0],
-            [startTime + globalResolution * 20, 1.0]
-        ];
-        initNodes();
+            console.log("Shall start seach: " + util.inspect(ctx.data));
+            ctx.io.emit('message', "Suche wird bald beginnen…");
+            var search = {
+                searchId: "search_"+ctx.id,
+                initialStartStation: stations[ctx.data.startStation.id],
+                finalDestionationStation: stations[ctx.data.destionationStation.id],
+                startTime: new Date(ctx.data.selectedDate).getTime() / 1000,
+            }
 
-        addOpenNode(nodeByStationId[initialStartStation.id], timerange, null, "losgehen");
-        performSearch();
-        ctx.io.emit('message', "Suche hat begonnen.");
-    }),
-    socket('connect', ctx => {
-        globalIo = ctx.io;
-        console.log('client connected', Object.keys(ctx.io.sockets.sockets))
-        ctx.io.emit('count', { msg: 'HI U', count: Object.keys(ctx.io.sockets.sockets).length })
-    })
-])
-    .then(() => console.log(`Server running at http://localhost:${port}`))
+            initiateSearch(search);
 
+            ctx.io.emit('message', "Suche hat begonnen.");
+        }),
+        socket('connect', ctx => {
+            globalIo = ctx.io;
+            console.log('client connected', Object.keys(ctx.io.sockets.sockets))
+            ctx.io.emit('count', { msg: 'HI U', count: Object.keys(ctx.io.sockets.sockets).length })
+        })
+    ])
+        .then(() => console.log(`Server running at http://localhost:${port}`))
+}
 
 function initBerlinStations() {
     var keys = Object.keys(lines_at);
@@ -336,13 +293,13 @@ function indexSchedules() {
     }
 }
 
-function addOpenNode(node, arrival, previousNode, line, prevDeparture, stops) {
+function addOpenNode(search, node, arrival, previousNode, line, prevDeparture, stops) {
     if (node.arrivalExp) {
-        assert(openNodes.includes(node));
+        assert(search.openNodes.includes(node));
         if (node.arrivalExp < getExpectedTime(arrival)) {
             return;
         } else {
-            openNodes.splice(openNodes.indexOf(node), 1);
+            search.openNodes.splice(search.openNodes.indexOf(node), 1);
         }
     }
     node.arrival = arrival;
@@ -352,15 +309,15 @@ function addOpenNode(node, arrival, previousNode, line, prevDeparture, stops) {
     node.line = line;
     node.prevDeparture = prevDeparture;
     node.stops = stops;
-    if (!openNodes.includes(node)) {
-        openNodes.push(node);
+    if (!search.openNodes.includes(node)) {
+        search.openNodes.push(node);
     }
-    openNodes.sort((a, b) => b.heuristic - a.heuristic);
+    search.openNodes.sort((a, b) => b.heuristic - a.heuristic);
 }
 
-function addClosedNode(node) {
-    if (!closedNodes.includes(node)) {
-        closedNodes.push(node);
+function addClosedNode(search, node) {
+    if (!search.closedNodes.includes(node)) {
+        search.closedNodes.push(node);
     }
 }
 
@@ -415,9 +372,9 @@ function drawLine(loc1, loc2, char) {
     }
 }
 
-function printMap() {
-    drawOnMap(initialStartStation.location, '🚩');
-    drawOnMap(finalDestionationStation.location, '🏁');
+function printMap(search) {
+    drawOnMap(search.initialStartStation.location, '🚩');
+    drawOnMap(search.finalDestionationStation.location, '🏁');
 
     for (var y = mapHeight - 1; y >= 0; y--) {
         var line = "";
@@ -584,21 +541,21 @@ function printJourneyTable(node) {
     }
 }
 
-function processNode(node) {
+function processNode(search, node) {
     sendMessage("Untersuche " + node.station.name);
-    if (node.station == finalDestionationStation) {
+    if (node.station == search.finalDestionationStation) {
         console.log("Reached target.");
         printJourney(node);
         printJourneyTable(node);
         printTimeRangeRelative(node.arrival);
-        printMap();
+        printMap(search);
         // process.exit(0);
         sendMessage("Fertig!");
-        openNodes = [];
+        search.openNodes = [];
         return;
     }
 
-    addClosedNode(node);
+    addClosedNode(search, node);
 
     const timerangeAtPlatform = travel(node.arrival, changePlatformTimeSpan, 1);
     const minTimestamp = timerangeAtPlatform[0][0]; // earliest time that we can arrive at startStation
@@ -641,8 +598,9 @@ function processNode(node) {
                 const destinationStationIndex = loopStationIndex;
 
                 var connectingLines = lines_at[destinationStation.id];
-                var destinameNode = nodeByStationId[destinationStation.id];
-                if (closedNodes.includes(destinameNode)) {
+                var destinationNode = search.nodeByStationId[destinationStation.id];
+                assert(destinationNode);
+                if (search.closedNodes.includes(destinationNode)) {
                     continue;
                 }
 
@@ -653,7 +611,7 @@ function processNode(node) {
                 var minutes = (schedule.sequence[destinationStationIndex].departure - schedule.sequence[startStationIndex].departure) / 60;
 
                 // Is it plausible to get off here? Only if we can transfer, we are at our destination 
-                if (otherSuitableLines.length > 0 || destinationStation == finalDestionationStation) {
+                if (otherSuitableLines.length > 0 || destinationStation == search.finalDestionationStation) {
                     var departures = [];
                     for (const routeStartTime of relevantStartTimes) {
                         cDepartures++;
@@ -685,7 +643,7 @@ function processNode(node) {
                         if (!checkPlausibility(timerangeAtPlatform, aggregateDepartureTime)) console.log("^ A");
                         if (!checkPlausibility(aggregateDepartureTime, arrivalTime)) console.log("^ B");
 
-                        addOpenNode(destinameNode, arrivalTime, node, line, aggregateDepartureTime, route_stops.slice(startStationIndex, loopStationIndex + 1));
+                        addOpenNode(search, destinationNode, arrivalTime, node, line, aggregateDepartureTime, route_stops.slice(startStationIndex, loopStationIndex + 1));
                     }
                 }
             }
@@ -909,13 +867,13 @@ function indexStops() {
     }
 }
 
-function initNodes() {
+function initNodes(search) {
     for (station of berlinStations) {
-        nodeByStationId[station.id] = {
+        search.nodeByStationId[station.id] = {
             station: station,
             arrival: null,
             arrivalExp: null,
-            distance: distBetweenStations(station, finalDestionationStation),
+            distance: distBetweenStations(station, search.finalDestionationStation),
             heuristic: null,
             journey: null
         };
