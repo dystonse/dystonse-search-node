@@ -149,8 +149,10 @@ var transferTimeSpan = [ // for ideal travel = 60
 
 var nextJourneyId = 1;
 
-const globalResolution = 30;
-const maxDataPoints = 120;
+const globalResolution = 120;
+const maxDataPoints = 60;
+//const globalResolution = 30;
+//const maxDataPoints = 120;
 
 var map;
 var mapWidth, mapHeight;
@@ -185,7 +187,7 @@ var exampleSearch = {
     startStation: {
         id: 323,
     },
-    destionationStation: {
+    destinationStation: {
         id: 8493,
     },
     selectedDate: new Date("2019-07-26T11:00:00"),
@@ -231,6 +233,10 @@ function sendMessage(text) {
     globalIo.emit("message", text);
 };
 
+function setRole(stationId, role) {
+    globalIo.emit("setrole", { stationid: stationId, role: role});
+};
+
 function startServer() {
     // get server port from environment or default to 3000
     const port = process.env.PORT || 3000
@@ -247,8 +253,8 @@ function startServer() {
             var search = {
                 searchId: "search_"+ctx.id,
                 initialStartStation: stations[ctx.data.startStation.id],
-                finalDestionationStation: stations[ctx.data.destionationStation.id],
-                startTime: new Date(ctx.data.selectedDate).getTime() / 1000,
+                finalDestinationStation: stations[ctx.data.destinationStation.id],
+                startTime: new Date(ctx.data.date).getTime() / 1000,
             }
 
             initiateSearch(search);
@@ -374,7 +380,7 @@ function drawLine(loc1, loc2, char) {
 
 function printMap(search) {
     drawOnMap(search.initialStartStation.location, '🚩');
-    drawOnMap(search.finalDestionationStation.location, '🏁');
+    drawOnMap(search.finalDestinationStation.location, '🏁');
 
     for (var y = mapHeight - 1; y >= 0; y--) {
         var line = "";
@@ -494,6 +500,25 @@ function printJourney(node) {
     console.log("Start at " + node.station.name + " at " + timespanstring(node.arrival));
 }
 
+
+function sendJourneyRoles(node) {
+    if (node.previousNode) {
+        sendJourneyRoles(node.previousNode);
+        for (stop of node.stops) {
+            var station = stationByStop[stop].id;
+            if(station) {
+              setRole(station, "through");
+            }
+        }
+    }
+    if (node.stops) {
+        for (var i = 0; i < node.stops.length - 1; i++) {
+            drawLine(stationByStop[node.stops[i]].location, stationByStop[node.stops[i + 1]].location, '🔸');
+        }
+    }
+    setRole(node.station.id, "change");
+}
+
 function printJourneyTable(node) {
     var minTime = Infinity;
     var maxTime = 0;
@@ -543,11 +568,13 @@ function printJourneyTable(node) {
 
 function processNode(search, node) {
     sendMessage("Untersuche " + node.station.name);
-    if (node.station == search.finalDestionationStation) {
+    setRole(node.station.id, "active");
+    if (node.station == search.finalDestinationStation) {
         console.log("Reached target.");
         printJourney(node);
         printJourneyTable(node);
         printTimeRangeRelative(node.arrival);
+        sendJourneyRoles(node);
         printMap(search);
         // process.exit(0);
         sendMessage("Fertig!");
@@ -611,7 +638,7 @@ function processNode(search, node) {
                 var minutes = (schedule.sequence[destinationStationIndex].departure - schedule.sequence[startStationIndex].departure) / 60;
 
                 // Is it plausible to get off here? Only if we can transfer, we are at our destination 
-                if (otherSuitableLines.length > 0 || destinationStation == search.finalDestionationStation) {
+                if (otherSuitableLines.length > 0 || destinationStation == search.finalDestinationStation) {
                     var departures = [];
                     for (const routeStartTime of relevantStartTimes) {
                         cDepartures++;
@@ -642,7 +669,7 @@ function processNode(search, node) {
 
                         if (!checkPlausibility(timerangeAtPlatform, aggregateDepartureTime)) console.log("^ A");
                         if (!checkPlausibility(aggregateDepartureTime, arrivalTime)) console.log("^ B");
-
+                        setRole(destinationNode.station.id, "open");
                         addOpenNode(search, destinationNode, arrivalTime, node, line, aggregateDepartureTime, route_stops.slice(startStationIndex, loopStationIndex + 1));
                     }
                 }
@@ -658,8 +685,8 @@ function processNode(search, node) {
     console.log("Stops: " + cStops);
     console.log("Departures: " + cDepartures);
     console.log("Multitransfers: " + cMultitransfers);
+    setRole(node.station.id, "closed");
 }
-
 
 function multitransfer(arrival, departures) {
     var combinedDeparture = [];
@@ -715,7 +742,7 @@ function multitransfer(arrival, departures) {
 function checkPlausibility(r1, r2) {
     const minTime = Math.min(r1[0][0], r2[0][0]);
     const maxTime = Math.max(r1[r1.length - 1][0], r2[r2.length - 1][0]);
-
+/*
     for (var t = minTime; t <= maxTime; t += globalResolution) {
         if (interpolate(r1, t) < interpolate(r2, t) - 0.01) {
             console.log("Inplausible at " + timestring(t) + ":");
@@ -725,6 +752,7 @@ function checkPlausibility(r1, r2) {
             return false;
         }
     }
+    */
     return true;
 }
 
@@ -873,7 +901,7 @@ function initNodes(search) {
             station: station,
             arrival: null,
             arrivalExp: null,
-            distance: distBetweenStations(station, search.finalDestionationStation),
+            distance: distBetweenStations(station, search.finalDestinationStation),
             heuristic: null,
             journey: null
         };
