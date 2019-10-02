@@ -201,6 +201,7 @@ function initiateSearch(search) {
     search.openNodes = [];
     search.closedNodes = [];
     search.nodeByStationId = {};
+    search.sentRoles = {};
     currentSearches[search.searchId] = search;
 
     // TODO use .time
@@ -216,7 +217,7 @@ function initiateSearch(search) {
 }
 
 function performSearchStep(search) {
-    if (search.openNodes.length > 0) { 
+    if (search.openNodes.length > 0) {
         var node = search.openNodes.pop();
         processNode(search, node);
         setImmediate(() => {
@@ -233,8 +234,25 @@ function sendMessage(text) {
     globalIo.emit("message", text);
 };
 
-function setRole(stationId, role) {
-    globalIo.emit("setrole", { stationid: stationId, role: role});
+function setRole(search, stationId, role) {
+    var station = stations[stationId];
+    // console.log("Role " + role + " for station " + station.name);
+    if(search.sentRoles[stationId] == role) { // already sen
+        return;
+    }
+    search.sentRoles[stationId] = role;
+    globalIo.emit("setrole", {
+        station: {
+            id: station.id,
+            location: station.location,
+            name: station.name,
+        }, role: role
+    });
+};
+
+function addLine(search, points, role) {
+    console.log("add a line");
+    globalIo.emit("addline", { points: points, role: role });
 };
 
 function startServer() {
@@ -251,7 +269,7 @@ function startServer() {
             console.log("Shall start seach: " + util.inspect(ctx.data));
             ctx.io.emit('message', "Suche wird bald beginnen…");
             var search = {
-                searchId: "search_"+ctx.id,
+                searchId: "search_" + ctx.id,
                 initialStartStation: stations[ctx.data.startStation.id],
                 finalDestinationStation: stations[ctx.data.destinationStation.id],
                 startTime: new Date(ctx.data.date).getTime() / 1000,
@@ -494,29 +512,39 @@ function printJourney(node) {
     }
     if (node.stops) {
         for (var i = 0; i < node.stops.length - 1; i++) {
-            drawLine(stationByStop[node.stops[i]].location, stationByStop[node.stops[i + 1]].location, '🔸');
+            var first = stationByStop[node.stops[i]];
+            var second = stationByStop[node.stops[i + 1]];
+            if(first && second) {
+                drawLine(first.location, second.location, '🔸');
+            }
         }
     }
     console.log("Start at " + node.station.name + " at " + timespanstring(node.arrival));
 }
 
 
-function sendJourneyRoles(node) {
+function sendJourneyRoles(search, node) {
     if (node.previousNode) {
-        sendJourneyRoles(node.previousNode);
-        for (stop of node.stops) {
-            var station = stationByStop[stop].id;
-            if(station) {
-              setRole(station, "through");
-            }
-        }
+        sendJourneyRoles(search, node.previousNode);
     }
     if (node.stops) {
         for (var i = 0; i < node.stops.length - 1; i++) {
-            drawLine(stationByStop[node.stops[i]].location, stationByStop[node.stops[i + 1]].location, '🔸');
+            var first = stationByStop[node.stops[i]];
+            var second = stationByStop[node.stops[i + 1]];
+            if (i > 0 && i < node.stops.length - 1) {
+                setRole(search, first.id, "through");
+            }
+            if(first && second) {
+                addLine(search, [
+                    [first.location.longitude, first.location.latitude],
+                    [second.location.longitude, second.location.latitude],
+                ], "route");
+            }
         }
     }
-    setRole(node.station.id, "change");
+    if (node.station.id != search.initialStartStation.id && node.station.id != search.finalDestinationStation.id) {
+        setRole(search, node.station.id, "change");
+    }
 }
 
 function printJourneyTable(node) {
@@ -568,13 +596,13 @@ function printJourneyTable(node) {
 
 function processNode(search, node) {
     sendMessage("Untersuche " + node.station.name);
-    setRole(node.station.id, "active");
+    setRole(search, node.station.id, "active");
     if (node.station == search.finalDestinationStation) {
         console.log("Reached target.");
         printJourney(node);
         printJourneyTable(node);
         printTimeRangeRelative(node.arrival);
-        sendJourneyRoles(node);
+        sendJourneyRoles(search, node);
         printMap(search);
         // process.exit(0);
         sendMessage("Fertig!");
@@ -669,7 +697,7 @@ function processNode(search, node) {
 
                         if (!checkPlausibility(timerangeAtPlatform, aggregateDepartureTime)) console.log("^ A");
                         if (!checkPlausibility(aggregateDepartureTime, arrivalTime)) console.log("^ B");
-                        setRole(destinationNode.station.id, "open");
+                        setRole(search, destinationNode.station.id, "open");
                         addOpenNode(search, destinationNode, arrivalTime, node, line, aggregateDepartureTime, route_stops.slice(startStationIndex, loopStationIndex + 1));
                     }
                 }
@@ -685,7 +713,7 @@ function processNode(search, node) {
     console.log("Stops: " + cStops);
     console.log("Departures: " + cDepartures);
     console.log("Multitransfers: " + cMultitransfers);
-    setRole(node.station.id, "closed");
+    setRole(search, node.station.id, "closed");
 }
 
 function multitransfer(arrival, departures) {
@@ -726,11 +754,11 @@ function multitransfer(arrival, departures) {
             pSum += pDep * pArriveNow; // Gewichtete Summe über verschiedene Ankunftszeiten ta für diese eine Abfahrtszeit td
             //console.log("Ankunft " + timestring(ta) + ": " + pSum);
         }
-
+/*
         if (pSum > interpolate(arrival, td)) {
             console.log("Hurz!");
         }
-
+*/
         //pOverallSum += pSum; // Summe für alle bisherigen Abfahrtszeiten td
         combinedDeparture.push([td, pSum]);
         //console.log("Um " + timestring(td) + ": " + pSum);
@@ -742,17 +770,17 @@ function multitransfer(arrival, departures) {
 function checkPlausibility(r1, r2) {
     const minTime = Math.min(r1[0][0], r2[0][0]);
     const maxTime = Math.max(r1[r1.length - 1][0], r2[r2.length - 1][0]);
-/*
-    for (var t = minTime; t <= maxTime; t += globalResolution) {
-        if (interpolate(r1, t) < interpolate(r2, t) - 0.01) {
-            console.log("Inplausible at " + timestring(t) + ":");
-            printTimeRange(r1);
-            console.log("----");
-            printTimeRange(r2);
-            return false;
+    /*
+        for (var t = minTime; t <= maxTime; t += globalResolution) {
+            if (interpolate(r1, t) < interpolate(r2, t) - 0.01) {
+                console.log("Inplausible at " + timestring(t) + ":");
+                printTimeRange(r1);
+                console.log("----");
+                printTimeRange(r2);
+                return false;
+            }
         }
-    }
-    */
+        */
     return true;
 }
 
