@@ -531,7 +531,7 @@ function sendJourneyRoles(search, node) {
         for (var i = 0; i < node.stops.length - 1; i++) {
             var first = stationByStop[node.stops[i]];
             var second = stationByStop[node.stops[i + 1]];
-            if (i > 0 && i < node.stops.length - 1) {
+            if (first && i > 0 && i < node.stops.length - 1) {
                 setRole(search, first.id, "through");
             }
             if(first && second) {
