@@ -328,7 +328,7 @@ function addOpenNode(search, node, arrival, previousNode, line, prevDeparture, s
     }
     node.arrival = arrival;
     node.arrivalExp = getExpectedTime(arrival);
-    node.heuristic = node.arrivalExp + node.distance / 20;
+    node.heuristic = node.arrivalExp + node.distance / 42; // heuristic, meters per second, 42 m/s is about 150 km/h
     node.previousNode = previousNode;
     node.line = line;
     node.prevDeparture = prevDeparture;
@@ -612,12 +612,12 @@ function processNode(search, node) {
 
     addClosedNode(search, node);
 
-    const timerangeAtPlatform = travel(node.arrival, changePlatformTimeSpan, 1);
+    const timerangeAtPlatform = makeFuzzy(node.arrival, changePlatformTimeSpan, 1);
     const minTimestamp = timerangeAtPlatform[0][0]; // earliest time that we can arrive at startStation
     const maxTimestamp = timerangeAtPlatform[timerangeAtPlatform.length - 1][0]; // latest time that we can arrive at startStation
 
-    if (timerangeAtPlatform[timerangeAtPlatform.length - 1][1] < 0.9) // chance that we ever arrive at the platform
-        return;
+    //if (timerangeAtPlatform[timerangeAtPlatform.length - 1][1] < 0.9) // chance that we ever arrive at the platform
+    //    return;
 
     node.arrivalOutgoingPlatform = timerangeAtPlatform;
 
@@ -629,6 +629,8 @@ function processNode(search, node) {
     for (schedule of schedulesByStationId[node.station.id]) {
         cSchedules++;
         const route_stops = schedule.route.stops;
+        // we don't consider vehicles which started more than 80 minutes before our earliest arrival. The longest U-Bahn (U7) takes 56 minutes for the whole journey.
+        // also we don't consider them if they start their journey more then 60 minutes after our latest possible arrival.
         const relevantStartTimes = schedule.starts.filter(ts => ts >= minTimestamp - 80 * 60 && ts <= maxTimestamp + 60 * 60);
         if (relevantStartTimes.length == 0) {
             continue;
@@ -665,7 +667,7 @@ function processNode(search, node) {
                 // how long does it usually take to drive from startStation to destinationStation?
                 var minutes = (schedule.sequence[destinationStationIndex].departure - schedule.sequence[startStationIndex].departure) / 60;
 
-                // Is it plausible to get off here? Only if we can transfer, we are at our destination 
+                // Is it plausible to get off here? Only if we can transfer, or we are at our destination 
                 if (otherSuitableLines.length > 0 || destinationStation == search.finalDestinationStation) {
                     var departures = [];
                     for (const routeStartTime of relevantStartTimes) {
@@ -673,15 +675,14 @@ function processNode(search, node) {
                         // scheduled time for departure from startStation
                         var scheduledDepartureTime = routeStartTime + schedule.sequence[startStationIndex].departure;
 
-                        // rule out any departures that are too early or too late to be relevant
-                        if (scheduledDepartureTime < minTimestamp - 800 || scheduledDepartureTime > maxTimestamp + 3600) {
+                        // rule out any departures that are too early or too late to be relevant (1800 = 30 minutes, 3600 = 1 hour)
+                        if (scheduledDepartureTime < minTimestamp - 1800 || scheduledDepartureTime > maxTimestamp + 3600) {
                             continue;
                         }
 
-                        // get a very exact time range
+                        // get a very exact time range, then make it fuzzy
                         const scheduledDepartureTimeRange = [[scheduledDepartureTime - 5, 0.0], [scheduledDepartureTime + 5, 1.0]];
-                        // then make it fuzzy
-                        const departureTime = travel(scheduledDepartureTimeRange, departureTimeSpans[line.product], 1, 0.99);
+                        const departureTime = makeFuzzy(scheduledDepartureTimeRange, departureTimeSpans[line.product], 1, 0.99);
                         departures.push(departureTime);
                     }
 
@@ -693,7 +694,7 @@ function processNode(search, node) {
                         const steps = 1; //Math.ceil(minutes / 4);
                         var arrivalTime = aggregateDepartureTime;
                         for (var i = 0; i < steps; i++)
-                            arrivalTime = travel(arrivalTime, travelTimeSpans[line.product], minutes / steps);
+                            arrivalTime = makeFuzzy(arrivalTime, travelTimeSpans[line.product], minutes / steps);
 
                         if (!checkPlausibility(timerangeAtPlatform, aggregateDepartureTime)) console.log("^ A");
                         if (!checkPlausibility(aggregateDepartureTime, arrivalTime)) console.log("^ B");
@@ -964,7 +965,7 @@ function interpolate(map, t) {
     return map[map.length - 1][1];
 }
 
-function travel(start, duration, timeMultiplier, pMultiplier = 1) {
+function makeFuzzy(start, duration, timeMultiplier, pMultiplier = 1) {
     var ret = [];
 
     var startMin = start[0][0];
