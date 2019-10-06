@@ -250,6 +250,21 @@ function setRole(search, stationId, role) {
     });
 };
 
+function sendStationGraph(search, stationId, data) {
+    var station = stations[stationId];
+    globalIo.emit("setstationgraph", {
+        stationid: stationId,
+        data: data,
+    });
+}
+
+
+function sendFullGraph(search, data) {
+    globalIo.emit("setgraph", {
+        data: data,
+    });
+}
+
 function addLine(search, points, role) {
     console.log("add a line");
     globalIo.emit("addline", { points: points, role: role });
@@ -547,6 +562,57 @@ function sendJourneyRoles(search, node) {
     }
 }
 
+function sendJourneyGraphs(search, node) {
+    var minTime = Infinity;
+    var maxTime = 0;
+
+    var nodes = [];
+    var curNode = node;
+    do {
+        if (curNode.arrival[0][0] < minTime)
+            minTime = curNode.arrival[0][0];
+        if (curNode.arrival[curNode.arrival.length - 1][0] > maxTime)
+            maxTime = curNode.arrival[curNode.arrival.length - 1][0];
+
+        nodes.push(curNode);
+        curNode = curNode.previousNode;
+    } while (curNode);
+    nodes.reverse();
+
+    minTime -= 60;
+    maxTime += 60;
+
+    var s = (maxTime - minTime) / 200;
+
+    var data = [];
+    var line = [ "Zeit" ];
+    for (curNode of nodes) {
+        if (curNode.prevDeparture) {
+            line.push("Abfahrt ab " + curNode.previousNode.station.name);
+        }
+        line.push("Ankunft an " + curNode.station.name);
+        if (curNode.arrivalOutgoingPlatform) {
+            line.push("Am Bahnsteig an " + curNode.station.name);
+        }
+    }
+    data.push(line);
+
+    for (var t = minTime; t <= maxTime; t += s) {
+        line = [ new Date(t * 1000).toISOString() ];
+        for (curNode of nodes) {
+            if (curNode.prevDeparture) {
+                line.push(interpolate(curNode.prevDeparture, t));
+            }
+            line.push(interpolate(curNode.arrival, t));
+            if (curNode.arrivalOutgoingPlatform) {
+                line.push(interpolate(curNode.arrivalOutgoingPlatform, t));
+            }
+        }
+        data.push(line);
+    }
+    sendFullGraph(search, data);
+}
+
 function printJourneyTable(node) {
     var minTime = Infinity;
     var maxTime = 0;
@@ -603,6 +669,7 @@ function processNode(search, node) {
         printJourneyTable(node);
         printTimeRangeRelative(node.arrival);
         sendJourneyRoles(search, node);
+        sendJourneyGraphs(search, node);
         printMap(search);
         // process.exit(0);
         sendMessage("Fertig!");
