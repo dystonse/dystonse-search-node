@@ -251,10 +251,14 @@ function setRole(search, stationId, role) {
 };
 
 function sendStationGraph(search, stationId, data) {
-    var station = stations[stationId];
+    var array = [ ["zeit", "ankunft"] ].concat(data.map( entry => [
+        new Date(entry[0] * 1000).toISOString(),
+        entry[1],
+        ]
+    ));
     globalIo.emit("setstationgraph", {
         stationid: stationId,
-        data: data,
+        data: array,
     });
 }
 
@@ -341,6 +345,7 @@ function addOpenNode(search, node, arrival, previousNode, line, prevDeparture, s
             search.openNodes.splice(search.openNodes.indexOf(node), 1);
         }
     }
+    sendStationGraph(search, node.station.id, arrival);
     node.arrival = arrival;
     node.arrivalExp = getExpectedTime(arrival);
     node.heuristic = node.arrivalExp + node.distance / 42; // heuristic, meters per second, 42 m/s is about 150 km/h
