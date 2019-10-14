@@ -250,7 +250,7 @@ function setRole(search, stationId, role) {
     });
 };
 
-function sendStationGraph(search, stationId, data) {
+function sendStationGraph(search, stationId, data, scheduledArrivals) {
     var array = [ ["zeit", "ankunft"] ].concat(data.map( entry => [
         new Date(entry[0] * 1000).toISOString(),
         entry[1],
@@ -259,6 +259,7 @@ function sendStationGraph(search, stationId, data) {
     globalIo.emit("setstationgraph", {
         stationid: stationId,
         data: array,
+        scheduledArrivals: scheduledArrivals,
     });
 }
 
@@ -336,7 +337,7 @@ function indexSchedules() {
     }
 }
 
-function addOpenNode(search, node, arrival, previousNode, line, prevDeparture, stops) {
+function addOpenNode(search, node, arrival, previousNode, line, prevDeparture, stops, scheduledArrivals) {
     if (node.arrivalExp) {
         assert(search.openNodes.includes(node));
         if (node.arrivalExp < getExpectedTime(arrival)) {
@@ -345,7 +346,7 @@ function addOpenNode(search, node, arrival, previousNode, line, prevDeparture, s
             search.openNodes.splice(search.openNodes.indexOf(node), 1);
         }
     }
-    sendStationGraph(search, node.station.id, arrival);
+    sendStationGraph(search, node.station.id, arrival, scheduledArrivals);
     node.arrival = arrival;
     node.arrivalExp = getExpectedTime(arrival);
     node.heuristic = node.arrivalExp + node.distance / 42; // heuristic, meters per second, 42 m/s is about 150 km/h
@@ -353,6 +354,7 @@ function addOpenNode(search, node, arrival, previousNode, line, prevDeparture, s
     node.line = line;
     node.prevDeparture = prevDeparture;
     node.stops = stops;
+    node.scheduledArrivals = scheduledArrivals;
     if (!search.openNodes.includes(node)) {
         search.openNodes.push(node);
     }
@@ -742,6 +744,7 @@ function processNode(search, node) {
                 // Is it plausible to get off here? Only if we can transfer, or we are at our destination 
                 if (otherSuitableLines.length > 0 || destinationStation == search.finalDestinationStation) {
                     var departures = [];
+                    var scheduledArrivals = [];
                     for (const routeStartTime of relevantStartTimes) {
                         cDepartures++;
                         // scheduled time for departure from startStation
@@ -756,6 +759,7 @@ function processNode(search, node) {
                         const scheduledDepartureTimeRange = [[scheduledDepartureTime - 5, 0.0], [scheduledDepartureTime + 5, 1.0]];
                         const departureTime = makeFuzzy(scheduledDepartureTimeRange, departureTimeSpans[line.product], 1, 0.99);
                         departures.push(departureTime);
+                        scheduledArrivals.push(new Date((scheduledDepartureTime + minutes * 60) * 1000).toISOString());
                     }
 
                     if (departures.length > 0) {
@@ -771,7 +775,7 @@ function processNode(search, node) {
                         if (!checkPlausibility(timerangeAtPlatform, aggregateDepartureTime)) console.log("^ A");
                         if (!checkPlausibility(aggregateDepartureTime, arrivalTime)) console.log("^ B");
                         setRole(search, destinationNode.station.id, "open");
-                        addOpenNode(search, destinationNode, arrivalTime, node, line, aggregateDepartureTime, route_stops.slice(startStationIndex, loopStationIndex + 1));
+                        addOpenNode(search, destinationNode, arrivalTime, node, line, aggregateDepartureTime, route_stops.slice(startStationIndex, loopStationIndex + 1), scheduledArrivals);
                     }
                 }
             }
