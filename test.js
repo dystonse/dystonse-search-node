@@ -594,13 +594,13 @@ function sendJourneyGraphs(search, node) {
     var line = [ "Zeit" ];
     for (curNode of nodes) {
         if (curNode.prevDeparture) {
-            line.push("Abfahrt ab " + curNode.previousNode.station.name);
+            line.push("Abfahrt mit " + curNode.line.name);
         }
         line.push("Ankunft an " + curNode.station.name);
-        if (curNode.arrivalOutgoingPlatform) {
-            line.push("Am Bahnsteig an " + curNode.station.name);
+        //if (curNode.arrivalOutgoingPlatform) {
+        //    line.push("Am Bahnsteig an " + curNode.station.name);
+        //}
         }
-    }
     data.push(line);
 
     for (var t = minTime; t <= maxTime; t += s) {
@@ -610,9 +610,9 @@ function sendJourneyGraphs(search, node) {
                 line.push(interpolate(curNode.prevDeparture, t));
             }
             line.push(interpolate(curNode.arrival, t));
-            if (curNode.arrivalOutgoingPlatform) {
-                line.push(interpolate(curNode.arrivalOutgoingPlatform, t));
-            }
+            //if (curNode.arrivalOutgoingPlatform) {
+            //    line.push(interpolate(curNode.arrivalOutgoingPlatform, t));
+            //}
         }
         data.push(line);
     }
