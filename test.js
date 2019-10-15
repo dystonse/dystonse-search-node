@@ -110,20 +110,19 @@ var travelTimeSpans = { // currently only for prevDelay = 0
         [114, 1.00]
     ],
     "subway": [
-        [13, 0.00],
-        [36, 0.02],
-        [60, 0.96],
-        [83, 0.99],
-        [106, 1.00],
-        [129, 1.00],
+        [40, 0.02],
+        [50, 0.06],
+        [60, 0.5],
+        [83, 0.93],
+        [106, 0.96],
+        [129, 0.98],
         [176, 1.00],
     ],
     "suburban":
         [
-            [28, 0.00],
-            [44, 0.27],
-            [60, 0.96],
-            [75, 0.99],
+            [45, 0.0],
+            [60, 0.5],
+            [75, 0.9],
             [91, 1.00]
         ]
 };
@@ -149,7 +148,7 @@ var transferTimeSpan = [ // for ideal travel = 60
 
 var nextJourneyId = 1;
 
-const globalResolution = 120;
+const globalResolution = 60;
 const maxDataPoints = 60;
 //const globalResolution = 30;
 //const maxDataPoints = 120;
@@ -750,14 +749,14 @@ function processNode(search, node) {
                         // scheduled time for departure from startStation
                         var scheduledDepartureTime = routeStartTime + schedule.sequence[startStationIndex].departure;
 
-                        // rule out any departures that are too early or too late to be relevant (1800 = 30 minutes, 3600 = 1 hour)
-                        if (scheduledDepartureTime < minTimestamp - 1800 || scheduledDepartureTime > maxTimestamp + 3600) {
+                        // rule out any departures that are too early or too late to be relevant (900 = 15 minutes)
+                        if (scheduledDepartureTime < minTimestamp - 900 || scheduledDepartureTime > maxTimestamp + 900) {
                             continue;
                         }
 
                         // get a very exact time range, then make it fuzzy
                         const scheduledDepartureTimeRange = [[scheduledDepartureTime - 5, 0.0], [scheduledDepartureTime + 5, 1.0]];
-                        const departureTime = makeFuzzy(scheduledDepartureTimeRange, departureTimeSpans[line.product], 1, 0.99);
+                        const departureTime = makeFuzzy(scheduledDepartureTimeRange, departureTimeSpans[line.product], 1, 0.9);
                         departures.push(departureTime);
                         scheduledArrivals.push(new Date((scheduledDepartureTime + minutes * 60) * 1000).toISOString());
                     }
@@ -967,7 +966,7 @@ function distBetweenStations(s1, s2) {
 function getExpectedTime(timerange) {
     // TODO this is not the expected value, but some kind of median
     for (var i = 0; i < timerange.length; i++) {
-        if (timerange[i][1] >= 0.5)
+        if (timerange[i][1] >= 0.9)
             return timerange[i][0];
     }
 }
