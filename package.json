@@ -18,7 +18,7 @@
     "@tyriar/fibonacci-heap": "2.0.9",
     "geodist": "0.2.1",
     "lodash.clonedeep": "4.5.0",
-    "printf": "0.5.2",
+    "printf": "0.6.1",
     "server": "1.0.19",
     "stream-to-array": "2.3.0",
     "vbb-find-station": "1.1.0",
